@@ -1,6 +1,6 @@
 # VOIDRUNNER
 
-**A deep-space infinite flight simulator.** Pilot a starfighter through an endless, procedurally-generated universe — threading asteroid fields, slingshotting past ringed planets, and escaping the gravitational pull of black holes that will consume you if you drift too close.
+**A deep-space infinite flight simulator.** Pilot a starfighter through an endless, procedurally-generated universe — threading asteroid fields, slingshotting past ringed planets, escaping the gravitational pull of black holes, and blowing rocks apart with auto-targeting plasma cannons.
 
 Built from scratch with **Three.js**, **WebGL**, custom GLSL shaders, procedural geometry/textures, and a fully synthesized WebAudio soundscape. No downloaded assets. No build step. Runs anywhere a browser runs.
 
@@ -20,13 +20,15 @@ Built from scratch with **Three.js**, **WebGL**, custom GLSL shaders, procedural
 
 - [Gameplay](#gameplay)
 - [Controls](#controls)
-- [Scoring & Rewards](#scoring--rewards)
+- [Weapons & Power-Ups](#weapons--power-ups)
+- [Scoring, Objectives & Rewards](#scoring-objectives--rewards)
 - [Hazards & Survival Constraints](#hazards--survival-constraints)
+- [Sectors & Ghost Racing](#sectors--ghost-racing)
 - [Feature Highlights](#feature-highlights)
+- [Performance Engineering](#performance-engineering)
 - [Tech Stack & Architecture](#tech-stack--architecture)
-- [Project Structure](#project-structure)
 - [Run Locally](#run-locally)
-- [Performance & Quality Tiers](#performance--quality-tiers)
+- [Quality Tiers](#quality-tiers)
 - [Browser Support](#browser-support)
 - [Roadmap](#roadmap)
 - [Credits & License](#credits--license)
@@ -35,114 +37,132 @@ Built from scratch with **Three.js**, **WebGL**, custom GLSL shaders, procedural
 
 ## Gameplay
 
-VOIDRUNNER is an infinite runner in three dimensions. Your ship flies forward automatically through a corridor of deep space; you control its lateral movement, throttle, and evasive maneuvers while the universe streams toward you.
+VOIDRUNNER is an infinite runner in three dimensions. Your ship flies forward automatically; you control lateral movement, throttle, evasive maneuvers — and your auto-cannon does the shooting wherever you point the reticle.
 
 Every run is different. A weighted spawn director generates patterns across five difficulty tiers that ramp with distance:
 
 | Pattern | Description |
 |---|---|
-| **Asteroid Fields** | Scattered tumbling rocks with independent drift and rotation |
+| **Asteroid Fields** | Scattered tumbling rocks with drift, rotation and destructible HP |
 | **Asteroid Walls** | A full grid of rock blocking the corridor — one gap, find it |
 | **Crystal Trails / Rings** | Sinusoidal chains and circular formations of void crystals |
 | **Boost Gates** | Torus gates that award bonuses and refill power |
-| **Planets** | Procedurally-textured worlds — gas giants with rings and moons at the corridor's edge, dwarf planets as lethal obstacles inside it |
-| **Black Holes** | Gravity wells with physically-scaled pull (`F ∝ 1/d²`) — escape them for bonus points, cross the event horizon and be consumed |
+| **Planets** | Procedurally-textured worlds — ringed giants at the corridor's edge, dwarf planets as lethal obstacles inside it |
+| **Black Holes** | Gravity wells with physically-scaled pull (`F ∝ 1/d²`), orbiting debris fields, photon rings — escape for bonus points, cross the horizon and be consumed |
+| **Comets** | Fast diagonal strikers with particle tails — high threat, high reward |
 
-Distance increases base velocity from 46 to 138 units/s. Spawn density, wall tightness, and black hole frequency all scale with tier.
+Base velocity climbs from 46 to 138 units/s. Spawn density, wall tightness, and black-hole frequency all scale with tier.
 
 ## Controls
 
-Designed so **everything is reachable with the mouse alone** on desktop, or a single thumb on mobile.
+Everything is reachable with **the mouse alone** on desktop — plus full gamepad and touch support.
 
-| Action | Mouse | Keyboard (optional) | Mobile / Touch |
-|---|---|---|---|
-| Steer | Move cursor (reticle marks heading) | WASD / Arrow keys | Drag anywhere — relative virtual stick |
-| Boost (afterburner) | Hold Left Click | `Shift` | Hold BOOST button |
-| Air brake | Hold Right Click | `S` / `Ctrl` | Hold BRK button |
-| Barrel roll dodge | Middle Click | `Space` | Tap ROLL button |
-| Pause | Pause button | `P` / `Esc` | Pause button |
-| Audio toggle | Audio button | `M` | Audio button |
+| Action | Mouse | Gamepad | Keyboard (optional) | Mobile |
+|---|---|---|---|---|
+| Steer | Move cursor / stick / lock modes | Left stick | WASD / Arrows | Drag anywhere |
+| Aim weapons | Reticle position | Reticle position | Reticle position | Reticle follows drag |
+| Boost | Hold LMB | RT / A | Shift | BOOST button |
+| Brake | Hold RMB | LT / B | S / Ctrl | BRK button |
+| Barrel roll | MMB | X / RB | Space | ROLL button |
+| Pause | Button | Start | P / Esc | Button |
+| Audio | Button | — | M | Button |
 
-Additional mechanics bound to controls:
+### Three mouse modes (Settings → Controls)
 
-- **Barrel roll**: 360° roll with a lateral impulse and ~0.65s of invulnerability. 1.7s cooldown.
-- **Boost**: 1.8× speed, drains power at 26/s. Coasting regenerates 11/s.
-- **Brake**: 0.42× speed for threading tight gaps.
+- **AIM** — classic absolute steering: the ship flies toward your cursor.
+- **STICK** — mouse movement acts as a self-centering virtual stick (relative control).
+- **LOCK** — click to capture the pointer for FPS-style mouselook; Esc auto-pauses.
 
-## Scoring & Rewards
+Additional options: sensitivity, invert X/Y, camera shake intensity (0–100%), auto-cannon toggle, left-handed touch layout, ghost toggle.
+
+## Weapons & Power-Ups
+
+- **Auto-cannon** — fires plasma bolts at any asteroid or comet inside your reticle cone (5 rounds/s). Sustained fire builds **heat**; at 100% the cannons lock out until cooled. Destroyed rocks shatter into debris and can drop crystals or power-ups.
+- **SHIELD** — absorbs the next 2 impacts (visible deflector bubble).
+- **REPAIR** — restores 35 hull.
+- **SURGE** — 8 seconds of free overdrive boosting.
+- **SCORE x2** — 12 seconds of doubled points.
+
+## Scoring, Objectives & Rewards
 
 | Event | Reward |
 |---|---|
 | Distance | Continuous: `speed × Δt × multiplier` |
-| Void Crystal | +150 × multiplier (magnetically attracted within range) |
+| Void Crystal | +150 × multiplier (magnet pickup) |
 | Boost Gate | +350 × multiplier, +16 power |
-| Near Miss | +75 × multiplier |
+| Near Miss | +75 × multiplier (comets +150) |
+| Asteroid Kill | +30 × multiplier, chance of drops |
+| Comet Kill | +120 × multiplier |
 | Gravity Well Escape | +400 × multiplier |
-| Hull damage | Combo resets to x1 |
+| Objective Complete | +400 XP |
+| Hull damage | Combo resets |
 
-The combo multiplier grows with every pickup/gate/near-miss chain up to **x5**.
+Combo multiplier climbs to **x5**. Score converts to XP (`score/60 + crystals×2 + gates×6 + near-misses + objectives`).
 
-### Progression
-
-- Score converts to **XP** at end of run (`score/60 + crystals×2 + gates×6 + near-misses`).
-- Levels persist via `localStorage`, unlocking **7 ship skins** (Cadet, Ember, Frostbite, Verdant, Pulse, Voidwalker, Aurum) equipable in the Hangar with live 3D preview.
-- Every level adds **+5 max hull** (capped at +60).
-- **10 achievements** tracked, from *First Flight* to *Event Horizon* (escape a black hole) and *Untouchable* (25k score without hull damage).
+**Progression:** levels unlock 7 ship skins (live 3D hangar preview), +5 max hull per level, 14 achievements, per-run objective system (3 of 8, rerolled every run), career profile with 10 tracked lifetime stats, and a local top-10 runs leaderboard.
 
 ## Hazards & Survival Constraints
 
-1. **Hull integrity** — asteroids and planets deal impact damage; slow self-repair kicks in after 4.5s without damage. At 0 the run ends.
-2. **Black holes** — inverse-square gravity bends your trajectory inside their influence radius. Warning banner, klaxon, and camera shake escalate as you approach. The event horizon is fatal.
-3. **Edge field** — the navigation corridor has soft boundaries. Pushing ~12 units past them burns hull every half-second.
-4. **Power economy** — boost is finite; gates and coasting refill it.
+1. **Hull integrity** — impacts deal damage; self-repair after 4.5s of calm.
+2. **Black holes** — inverse-square gravity bends your trajectory; warning banner, klaxon and camera shake escalate inside the well. The event horizon is fatal.
+3. **Edge field** — leaving the navigation corridor burns hull every half-second.
+4. **Power economy** — boost drains energy; gates and coasting refill it.
+5. **Weapon heat** — overzealous gunnery locks your cannons at the worst moment.
+
+## Sectors & Ghost Racing
+
+- Every 4 km you enter a new **named sector** — spawn pressure steps up and the nebula palette shifts to a new biome (6 hand-tuned palettes, smoothly cross-faded in the sky shader).
+- **Ghost racing** — your best run's flight path is recorded and replayed as a translucent wireframe ship to race against, every future run. Toggleable.
+- Async "multiplayer against yourself" — plus a persistent local leaderboard.
 
 ## Feature Highlights
 
 **Rendering**
-- Custom GLSL: fbm-noise nebula skybox, black-hole accretion disk shader, planet atmosphere fresnel shells, procedural planetary ring shaders
-- Infinite parallax starfield and speed-reactive dust implemented entirely in vertex shaders (position wrapping around the camera — no float-precision decay, ever)
-- UnrealBloom post-processing pipeline with HalfFloat render targets and MSAA samples
-- ACES filmic tone mapping
+- Custom GLSL everywhere: fbm nebula with live palette cross-fade, black-hole accretion disk + orbiting debris field, planet atmosphere fresnel shells, procedural ring shaders
+- Infinite parallax starfield and speed-reactive dust computed entirely in vertex shaders (position wrapping — no float-precision decay, ever)
+- UnrealBloom with HalfFloat targets and MSAA, ACES filmic tone mapping
 
 **Simulation**
-- Chase camera with exponential smoothing, velocity lead, FOV kick on boost, trauma-based screen shake, and banking-follow roll
-- Object-pooled entity system with zero per-frame allocations in the hot path
-- Treadmill world motion — ship stays near origin, eliminating floating-point drift on infinite runs
+- Chase camera with exponential smoothing, velocity lead, FOV kick, trauma-based shake (configurable)
+- Object-pooled everything: bolts, explosions, debris, shockwaves, flash lights, gates, planets, black holes
+- Treadmill world motion — ship stays near origin; infinite runs never lose float precision
 
 **Presentation**
-- Fully procedural ship model (extruded delta wings, canopy, twin engines with flickering glow), engine trail ribbons
-- Canvas-procedural planet textures, atmospheres, rings, orbiting moons
-- Live attract mode — menus float over the actual game simulating itself behind glass panels
-- Functional HUD: canvas radar with threat classification blips and radar sweep, hull/power bars, combo chip, projected 3D score popups
-- Complete WebAudio synthesis: throttled engine (oscillator + filtered noise wind), pitch-rising pickup arpeggios tied to combo, gate chords, explosion noise bursts, proximity alarm LFO, ambient drone pad
+- Procedural fighter with blinking nav lights, plasma exhaust plume, deflector shield bubble
+- Ghost ship rendered as a translucent wireframe of your best flight
+- Live attract mode — menus float over the actual simulation
+- Canvas radar with 7 threat classifications and sweep line
+- Full WebAudio synthesis: throttle-linked engine, laser fire, overheat hiss, pickup arpeggios, gate chords, alarms, sector stingers, ambient drone
 
-**Platform**
-- Responsive from phones to ultrawide desktops, safe-area aware
-- Unified Pointer Events input with multi-touch steering + button concurrency
-- Auto quality detection; manual override in settings
-- Persistent saves, pause-on-tab-blur, fullscreen support, PWA-friendly meta tags
+## Performance Engineering
+
+- **Instanced rendering** — all asteroids and crystals draw in 2 draw calls regardless of count (InstancedMesh with per-frame composed matrices)
+- **Dynamic Resolution Scaling** — in AUTO quality, frame-time EMA continuously scales render resolution between 60–100% (0.6 floor), stepping down under load and back up when headroom returns
+- **Zero-allocation hot path** — preallocated vectors/matrices, ring-buffer trails and comet tails, no per-frame object churn
+- **Throttled UI** — HUD text at 10 Hz, radar at 20 Hz, bars via GPU-friendly `transform: scaleX` (no layout thrash)
+- **GPU-side animation** — star twinkle, black-hole debris orbits and crystal pulse run in shaders, not JS
+- WebGL context-loss handling with auto-pause
 
 ## Tech Stack & Architecture
 
-- **Three.js r160** (ES modules via import map — no bundler required)
-- Vanilla ES2022 JavaScript, zero frameworks
-- Post-processing: RenderPass → UnrealBloomPass → OutputPass
+- **Three.js r160** via ES-module import map — no bundler required
+- Vanilla ES2022, zero frameworks
 
 ```
 index.html          Entry point, import map, all UI layers/DOM overlays
-css/style.css       Full UI system: HUD, menus, hangar, animations, responsive rules
-js/main.js          Bootstrap, state machine (attract/count/play/pause/over),
-                    flight physics, input aggregation, camera, scoring, run lifecycle
-js/world.js         Spawn director, entity pools, pattern generators,
-                    collision/gravity/near-miss systems, radar feed
-js/fx.js            Shader starfield, dust, nebula skybox
-js/fx2.js           Explosion/shockwave pools, engine trail ribbons
-js/ship.js          Procedural fighter model + skin system
-js/ui.js            DOM layer manager, HUD updates, radar renderer,
-                    hangar/achievement panels, popups, XP animations
-js/audio.js         WebAudio synthesizer: engine, SFX, alarm, music pad
-js/save.js          Persistence, XP curve, skin/achievement catalogs
-test-headless.mjs   Puppeteer E2E suite (boot, menus, gameplay, pause, audio)
+css/style.css       Full UI system: HUD, menus, hangar, profile, animations, responsive rules
+js/main.js          Bootstrap, state machine, flight physics, weapons/heat, power-up effects,
+                    gamepad, mouse modes, DRS, sectors, objectives, ghost, run lifecycle
+js/world.js         Instanced asteroid/crystal fields, spawn director, pattern generators,
+                    collisions, gravity, bolt interception, power-ups, comets, radar feed
+js/fx.js            Shader starfield, dust, nebula with sector palettes
+js/fx2.js           Explosion/shockwave/debris/flash pools, zero-alloc trail ribbons
+js/ship.js          Procedural fighter, nav lights, exhaust, shield bubble, ghost variant
+js/ui.js            DOM layer manager, HUD, radar, hangar/profile/achievement panels
+js/audio.js         WebAudio synthesizer: engine, lasers, SFX, alarms, music pad
+js/save.js          Persistence, XP curve, skins, sectors, achievements catalog
+test-headless.mjs   Puppeteer E2E suite (16 checks)
+test-live.mjs       Production smoke test
 docs/               Screenshots
 ```
 
@@ -159,45 +179,41 @@ npx serve .
 
 Open `http://localhost:8080`.
 
-### Automated E2E Test
-
-A headless-browser test suite drives the real game — boots the engine, opens every menu, launches a run, steers/boosts via synthetic mouse input, and asserts scoring, pause/resume, and audio toggle with zero console errors:
+### Automated Tests
 
 ```bash
 npm install
-npm test
+npm test        # headless E2E: boot, menus, gameplay, pause, persistence (16 checks)
+npm run test:live   # smoke test against the production deployment
 ```
 
-Requires Edge (configurable path in `test-headless.mjs`). Runs against a local server on a software-GL renderer.
+Requires Edge (path configurable in the test files). Tests run on a software-GL renderer and tolerate low headless frame rates.
 
-`npm run test:live` runs the same smoke suite against the production deployment.
+## Quality Tiers
 
-## Performance & Quality Tiers
-
-| Tier | Pixel Ratio | Bloom | MSAA | Stars/Dust | Default For |
+| Tier | Pixel Ratio | Bloom | MSAA | Stars/Dust | DRS |
 |---|---|---|---|---|---|
-| Low | 1.0 | off | 0 | reduced | weak GPUs |
-| Medium | ≤1.5 | 0.65 strength | 0 | mobile counts | touch devices (auto) |
-| High | ≤2.0 | 0.85 strength | 4x | full | desktop (auto) |
-
-Quality auto-selects by pointer type; override anytime in Settings. Entity pooling keeps frame times flat regardless of run length.
+| Low | 1.0 | off | 0 | reduced | off |
+| Medium | ≤1.5 | 0.65 | 0 | mobile counts | off |
+| High | ≤2.0 | 0.85 | 4x | full | off |
+| **Auto** | device-based, **adaptive 60–100%** | yes | yes | by device | **on** |
 
 ## Browser Support
 
-Chrome/Edge 90+, Firefox 90+, Safari 15+ (desktop & iOS). Requires WebGL. Audio unlocks on first interaction per browser autoplay policy.
+Chrome/Edge 90+, Firefox 90+, Safari 15+ (desktop & iOS). Requires WebGL. Audio unlocks on first interaction. Gamepad API supported in all modern browsers.
 
 ## Roadmap
 
 - Global leaderboard (Vercel Functions + Redis)
-- Async ghost racing against your best runs
-- Weapon systems and destructible asteroids
-- Gamepad API support
+- Live multiplayer racing via WebRTC
+- Boss encounters
+- Daily seeded challenges
 
 ## Credits & License
 
 Built by **[Aniruddha Adak](https://github.com/aniruddhaadak80)** · AI Agent Engineer / Full-Stack Developer
 
 - Rendering: [Three.js](https://threejs.org) (MIT)
-- All game code, shaders, procedural assets, audio synthesis, and design: original work
+- All game code, shaders, procedural assets, audio synthesis and design: original work
 
 Licensed under the MIT License.

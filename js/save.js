@@ -20,21 +20,37 @@ export const ACH = [
   { id: 'gates',    name: 'Gatecrasher',         desc: 'Clear 25 boost gates in total',        test: s => s.stats.gates >= 25 },
   { id: 'horizon',  name: 'Event Horizon',       desc: 'Escape a black hole gravity well',     test: s => s.stats.escapes >= 1 },
   { id: 'clean',    name: 'Untouchable',         desc: 'Score 25,000 with zero hull damage',   test: s => s.flawless >= 25000 },
-  { id: 'cent',     name: 'Centurion',           desc: 'Reach level 10',                       test: s => levelInfo(s.xp).level >= 10 }
+  { id: 'cent',     name: 'Centurion',           desc: 'Reach level 10',                       test: s => levelInfo(s.xp).level >= 10 },
+  { id: 'gunner',   name: 'Gunner',              desc: 'Destroy 100 asteroids with plasma',    test: s => s.stats.kills >= 100 },
+  { id: 'empower',  name: 'Empowered',           desc: 'Collect 25 power-ups in total',        test: s => s.stats.powerups >= 25 },
+  { id: 'triple',   name: 'Completionist',       desc: 'Complete all 3 objectives in one run', test: s => s.perfectObjectives >= 1 },
+  { id: 'marathon', name: 'Marathoner',          desc: 'Fly 250 km across all runs',           test: s => s.stats.dist >= 250000 }
+];
+
+export const SECTOR_NAMES = [
+  'CARINA EXPANSE', 'ORION VEIL', 'LYRA GAP', 'DRACO REACH',
+  'VEGA SHALLOWS', 'CYGNUS RIFT', 'PERSEUS DRIFT', 'AQUILA FIELD',
+  'CETUS DEEP', 'TUCANA SPUR', 'ARA CORRIDOR', 'BOOTES WASTE'
 ];
 
 export function defaultSave() {
   return {
-    v: 1,
+    v: 2,
     best: 0,
     bestDist: 0,
     bestCrystals: 0,
     flawless: 0,
+    perfectObjectives: 0,
     xp: 0,
     equipped: 'cadet',
-    stats: { runs: 0, crystals: 0, gates: 0, dist: 0, nearMisses: 0, escapes: 0, kills: 0 },
+    runs: [],
+    ghost: null,
+    stats: { runs: 0, crystals: 0, gates: 0, dist: 0, nearMisses: 0, escapes: 0, kills: 0, playtime: 0, powerups: 0 },
     ach: {},
-    settings: { sound: true, quality: 'auto', sens: 1.0, invertY: false }
+    settings: {
+      sound: true, quality: 'auto', sens: 1.0, invertY: false, invertX: false,
+      shake: 1.0, controlMode: 'aim', autofire: true, lefty: false, ghost: true
+    }
   };
 }
 
@@ -44,13 +60,17 @@ export function load() {
     if (!raw) return defaultSave();
     const data = JSON.parse(raw);
     const def = defaultSave();
-    return {
+    const merged = {
       ...def,
       ...data,
       stats: { ...def.stats, ...(data.stats || {}) },
       settings: { ...def.settings, ...(data.settings || {}) },
-      ach: { ...(data.ach || {}) }
+      ach: { ...(data.ach || {}) },
+      runs: Array.isArray(data.runs) ? data.runs.slice(0, 10) : [],
+      ghost: data.ghost || null
     };
+    merged.v = 2;
+    return merged;
   } catch (e) {
     return defaultSave();
   }

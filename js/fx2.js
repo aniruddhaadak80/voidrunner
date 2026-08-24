@@ -135,19 +135,113 @@ export class Shocks {
   }
 }
 
+export class Debris {
+  constructor(scene, poolSize) {
+    this.pool = [];
+    const geo = new THREE.TetrahedronGeometry(0.55, 0);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x6b6156, roughness: 1, flatShading: true });
+    for (let i = 0; i < poolSize; i++) {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.visible = false;
+      scene.add(mesh);
+      this.pool.push({
+        mesh,
+        vel: new THREE.Vector3(),
+        rot: new THREE.Vector3(),
+        life: 0,
+        scale: 1
+      });
+    }
+  }
+
+  spawn(origin, count, power) {
+    let spawned = 0;
+    for (const d of this.pool) {
+      if (spawned >= count) break;
+      if (d.life > 0) continue;
+      d.mesh.position.copy(origin);
+      const th = Math.random() * Math.PI * 2;
+      const ph = Math.acos(2 * Math.random() - 1);
+      const sp = 8 + Math.random() * 26 * power;
+      d.vel.set(Math.sin(ph) * Math.cos(th) * sp, Math.sin(ph) * Math.sin(th) * sp, Math.cos(ph) * sp);
+      d.rot.set(Math.random() * 8 - 4, Math.random() * 8 - 4, Math.random() * 8 - 4);
+      d.scale = 0.5 + Math.random() * 1.1 * power;
+      d.mesh.scale.setScalar(d.scale);
+      d.life = 1;
+      d.mesh.visible = true;
+      spawned++;
+    }
+  }
+
+  update(dt) {
+    for (const d of this.pool) {
+      if (d.life <= 0) continue;
+      d.life -= dt * 0.9;
+      if (d.life <= 0) {
+        d.mesh.visible = false;
+        continue;
+      }
+      d.mesh.position.addScaledVector(d.vel, dt);
+      d.mesh.rotation.x += d.rot.x * dt;
+      d.mesh.rotation.y += d.rot.y * dt;
+      d.mesh.scale.setScalar(d.scale * d.life);
+    }
+  }
+}
+
+export class Flash {
+  constructor(scene, poolSize) {
+    this.pool = [];
+    for (let i = 0; i < poolSize; i++) {
+      const light = new THREE.PointLight(0xffffff, 0, 60, 2);
+      light.visible = false;
+      scene.add(light);
+      this.pool.push({ light, life: 0 });
+    }
+  }
+
+  trigger(origin, colorHex, power = 1) {
+    const f = this.pool.find(p => p.life <= 0.15) || this.pool[0];
+    f.light.position.copy(origin);
+    f.light.color.set(colorHex);
+    f.light.intensity = 26 * power;
+    f.light.distance = 40 + power * 40;
+    f.life = 1;
+    f.light.visible = true;
+  }
+
+  update(dt) {
+    for (const f of this.pool) {
+      if (f.life <= 0) continue;
+      f.life -= dt * 3.2;
+      if (f.life <= 0) {
+        f.light.visible = false;
+        f.light.intensity = 0;
+        continue;
+      }
+      f.light.intensity *= Math.pow(0.001, dt);
+    }
+  }
+}
+
 export class Trails {
   constructor(scene, ship, glowColor) {
     this.ship = ship;
-    this.MAX = 38;
-    this.histL = [];
-    this.histR = [];
+    this.MAX = 40;
+    this.ringL = new Float32Array(this.MAX * 3);
+    this.ringR = new Float32Array(this.MAX * 3);
+    this.head = 0;
+    this.count = 0;
     this.tipL = new THREE.Vector3();
     this.tipR = new THREE.Vector3();
+    this.tmpL = new THREE.Vector3();
+    this.tmpR = new THREE.Vector3();
     this.color = new THREE.Color(glowColor);
     this.lineL = this.makeLine();
     this.lineR = this.makeLine();
     scene.add(this.lineL);
     scene.add(this.lineR);
+    this.clear();
   }
 
   makeLine() {
@@ -190,33 +284,51 @@ export class Trails {
   }
 
   push() {
-    this.ship.group.updateMatrixWorld(true);
-    this.tipL.set(-0.62, 0.02, 1.62).applyMatrix4(this.ship.group.matrixWorld);
-    this.tipR.set(0.62, 0.02, 1.62).applyMatrix4(this.ship.group.matrixWorld);
-    this.histL.unshift(this.tipL.clone());
-    this.histR.unshift(this.tipR.clone());
-    if (this.histL.length > this.MAX) this.histL.pop();
-    if (this.histR.length > this.MAX) this.histR.pop();
-    this.write(this.lineL, this.histL);
-    this.write(this.lineR, this.histR);
+    const g = this.ship.group;
+    g.updateMatrixWorld(true);
+    this.tmpL.set(-0.62, 0.02, 1.62).applyMatrix4(g.matrixWorld);
+    this.tmpR.set(0.62, 0.02, 1.62).applyMatrix4(g.matrixWorld);
+    const h = this.head;
+    this.ringL[h * 3] = this.tmpL.x;
+    this.ringL[h * 3 + 1] = this.tmpL.y;
+    this.ringL[h * 3 + 2] = this.tmpL.z;
+    this.ringR[h * 3] = this.tmpR.x;
+    this.ringR[h * 3 + 1] = this.tmpR.y;
+    this.ringR[h * 3 + 2] = this.tmpR.z;
+    this.head = (h + 1) % this.MAX;
+    if (this.count < this.MAX) this.count++;
+    this.write(this.lineL, this.ringL);
+    this.write(this.lineR, this.ringR);
   }
 
-  write(line, hist) {
+  write(line, ring) {
     const arr = line.geometry.attributes.position.array;
+    let idx = this.head;
     for (let i = 0; i < this.MAX; i++) {
-      const p = hist[Math.min(i, hist.length - 1)];
-      if (p) {
-        arr[i * 3] = p.x;
-        arr[i * 3 + 1] = p.y;
-        arr[i * 3 + 2] = p.z;
-      }
+      const j = (idx + this.MAX) % this.MAX;
+      arr[i * 3] = ring[j * 3];
+      arr[i * 3 + 1] = ring[j * 3 + 1];
+      arr[i * 3 + 2] = ring[j * 3 + 2];
+      idx++;
     }
     line.geometry.attributes.position.needsUpdate = true;
   }
 
   clear() {
-    this.histL.length = 0;
-    this.histR.length = 0;
+    this.ringL.fill(0);
+    this.ringR.fill(0);
+    this.head = 0;
+    this.count = 0;
+    const p = this.ship.group.position;
+    for (const line of [this.lineL, this.lineR]) {
+      const arr = line.geometry.attributes.position.array;
+      for (let i = 0; i < this.MAX; i++) {
+        arr[i * 3] = p.x;
+        arr[i * 3 + 1] = p.y;
+        arr[i * 3 + 2] = p.z;
+      }
+      line.geometry.attributes.position.needsUpdate = true;
+    }
   }
 
   setVisible(v) {

@@ -212,4 +212,49 @@ export class AudioSys {
   countBeep(last = false) {
     this.blip(last ? 880 : 440, last ? 0.4 : 0.12, 'square', 0.16);
   }
+
+  laser() {
+    if (!this.ctx) return;
+    const c = this.ctx;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(920, c.currentTime);
+    o.frequency.exponentialRampToValueAtTime(190, c.currentTime + 0.09);
+    g.gain.setValueAtTime(0.09, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.1);
+    o.connect(g).connect(this.master);
+    o.start();
+    o.stop(c.currentTime + 0.12);
+  }
+
+  overheat() {
+    if (!this.ctx) return;
+    const c = this.ctx;
+    const src = c.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const filt = c.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.value = 2400;
+    filt.Q.value = 2;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.22, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.5);
+    src.connect(filt).connect(g).connect(this.master);
+    src.start();
+    src.stop(c.currentTime + 0.55);
+  }
+
+  powerup() {
+    [440, 660, 880].forEach((f, i) => setTimeout(() => this.blip(f, 0.14, 'sine', 0.18), i * 60));
+  }
+
+  objective() {
+    this.blip(660, 0.16, 'triangle', 0.18);
+    setTimeout(() => this.blip(990, 0.28, 'triangle', 0.18), 130);
+  }
+
+  sectorSfx() {
+    [330, 415, 495].forEach((f, i) => setTimeout(() => this.blip(f, 0.3, 'sine', 0.14), i * 110));
+  }
 }

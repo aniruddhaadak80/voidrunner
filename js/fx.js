@@ -139,12 +139,29 @@ export class Dust {
   }
 }
 
+export const NEBULA_PALETTES = [
+  { a: [0.07, 0.03, 0.17], b: [0.02, 0.10, 0.18], c: [0.13, 0.07, 0.24] },
+  { a: [0.18, 0.05, 0.04], b: [0.16, 0.08, 0.02], c: [0.26, 0.10, 0.05] },
+  { a: [0.02, 0.14, 0.10], b: [0.03, 0.12, 0.16], c: [0.06, 0.22, 0.16] },
+  { a: [0.04, 0.07, 0.20], b: [0.10, 0.03, 0.20], c: [0.10, 0.15, 0.30] },
+  { a: [0.16, 0.04, 0.10], b: [0.12, 0.03, 0.16], c: [0.24, 0.08, 0.16] },
+  { a: [0.16, 0.11, 0.03], b: [0.14, 0.05, 0.08], c: [0.24, 0.17, 0.06] }
+];
+
 export class Nebula {
   constructor(scene) {
+    const p0 = NEBULA_PALETTES[0];
+    this.cur = { a: [...p0.a], b: [...p0.b], c: [...p0.c] };
+    this.tgt = { a: [...p0.a], b: [...p0.b], c: [...p0.c] };
     this.mat = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
-      uniforms: { uTime: { value: 0 } },
+      uniforms: {
+        uTime: { value: 0 },
+        uA: { value: new THREE.Vector3(...p0.a) },
+        uB: { value: new THREE.Vector3(...p0.b) },
+        uC: { value: new THREE.Vector3(...p0.c) }
+      },
       vertexShader: `
         varying vec3 vDir;
         void main(){
@@ -153,19 +170,19 @@ export class Nebula {
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: NOISE_GLSL + `
-        uniform float uTime;
+        uniform float uTime; uniform vec3 uA; uniform vec3 uB; uniform vec3 uC;
         varying vec3 vDir;
         void main(){
           vec3 d = normalize(vDir);
           vec2 p1 = vec2(d.x*2.1 + d.z*1.4, d.y*2.4 - d.z*0.9);
           float n = fbm(p1*1.8 + vec2(uTime*0.006, uTime*0.003));
           float n2 = fbm(p1*3.6 - vec2(uTime*0.004, 0.0));
-          vec3 col = mix(vec3(0.012,0.018,0.05), vec3(0.07,0.03,0.17), smoothstep(0.42,0.78,n));
-          col = mix(col, vec3(0.02,0.10,0.18), smoothstep(0.52,0.86,n2)*0.75);
-          col += vec3(0.13,0.07,0.24) * pow(max(n-0.58,0.0)*2.4, 2.0);
-          col += vec3(0.02,0.09,0.12) * pow(max(n2-0.62,0.0)*2.6, 2.0);
+          vec3 col = mix(vec3(0.012,0.018,0.05), uA, smoothstep(0.42,0.78,n));
+          col = mix(col, uB, smoothstep(0.52,0.86,n2)*0.75);
+          col += uC * pow(max(n-0.58,0.0)*2.4, 2.0);
+          col += uB * pow(max(n2-0.62,0.0)*2.6, 2.0);
           float band = smoothstep(0.15,0.0,abs(d.y))*0.35;
-          col += vec3(0.05,0.02,0.10)*band;
+          col += uA*0.35*band;
           gl_FragColor = vec4(col, 1.0);
         }`
     });
@@ -175,8 +192,18 @@ export class Nebula {
     scene.add(this.mesh);
   }
 
-  update(camPos, t) {
+  setPalette(p) {
+    this.tgt = { a: [...p.a], b: [...p.b], c: [...p.c] };
+  }
+
+  update(camPos, t, dt) {
     this.mesh.position.copy(camPos);
     this.mat.uniforms.uTime.value = t;
+    const k = Math.min(1, dt * 0.6);
+    const c = this.cur, g = this.tgt, u = this.mat.uniforms;
+    for (const key of ['a', 'b', 'c']) {
+      for (let i = 0; i < 3; i++) c[key][i] += (g[key][i] - c[key][i]) * k;
+      u['u' + key.toUpperCase()].value.set(c[key][0], c[key][1], c[key][2]);
+    }
   }
 }

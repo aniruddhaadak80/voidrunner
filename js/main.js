@@ -3,10 +3,10 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { load as loadSave, persist as persistSave, SKINS, ACH, levelInfo, skinById } from './save.js';
+import { load as loadSave, persist as persistSave, SKINS, ACH, SECTOR_NAMES, levelInfo, skinById } from './save.js';
 import { AudioSys } from './audio.js';
-import { Stars, Dust, Nebula } from './fx.js';
-import { Explosions, Shocks, Trails } from './fx2.js';
+import { Stars, Dust, Nebula, NEBULA_PALETTES } from './fx.js';
+import { Explosions, Shocks, Debris, Flash, Trails } from './fx2.js';
 import { Ship } from './ship.js';
 import { World } from './world.js';
 import { UI } from './ui.js';
@@ -22,6 +22,14 @@ let runSeq = 0;
 let consume = null;
 let deathPos = new THREE.Vector3();
 const keys = {};
+const gp = { on: false, index: -1, prev: {} };
+const input = { mx: 0, my: 0, touchId: null, sx0: 0, sy0: 0, tx: 0, ty: 0, stickX: 0, stickY: 0, locked: false };
+const bolts = [];
+const activeBolts = [];
+const boltPool = [];
+const tmpV1 = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
+const tmpV3 = new THREE.Vector3();
 
 const state = {
   speed: 0, dist: 0, score: 0, combo: 0, mult: 1, crystals: 0, gates: 0,
@@ -29,11 +37,17 @@ const state = {
   boost: false, brake: false, boostEff: false,
   steer: { x: 0, y: 0, tx: 0, ty: 0 },
   rollT: 0, rollDir: 1, rollCd: 0, invuln: 0, calm: 0, edgeT: 0,
-  trauma: 0, timeScale: 1, slowT: 0, bhDanger: null, damageTaken: 0, consuming: false
+  trauma: 0, timeScale: 1, slowT: 0, bhDanger: null, damageTaken: 0, consuming: false,
+  heat: 0, overheat: 0, fireCd: 0, targetLock: false,
+  shield: 0, mult2T: 0, overdriveT: 0,
+  sector: 0, sectorName: '', kills: 0, powerups: 0, runTime: 0, bonusXp: 0,
+  objectives: []
 };
 
 const ctx = {};
-const input = { mx: 0, my: 0, touchId: null, sx0: 0, sy0: 0, tx: 0, ty: 0 };
+let frameEMA = 16, drsTimer = 0, drsScale = 1, basePr = 2;
+let radarT = 0;
+let ghostShip = null;
 
 function init() {
   const splashMsg = document.querySelector('#splash .msg');
@@ -62,6 +76,11 @@ function init() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   document.getElementById('app').prepend(renderer.domElement);
+  renderer.domElement.addEventListener('webglcontextlost', e => {
+    e.preventDefault();
+    if (mode === 'play') pauseGame();
+    ctx.ui.toast('GPU CONTEXT INTERRUPTED — RUN PAUSED');
+  });
 
   scene.add(new THREE.HemisphereLight(0x8899ff, 0x0b0e1a, 0.55));
   const dir = new THREE.DirectionalLight(0xfff4e0, 1.5);
@@ -75,7 +94,9 @@ function init() {
     dust: new Dust(scene, isTouch ? 260 : 480),
     neb: new Nebula(scene),
     expl: new Explosions(scene, 10),
-    shocks: new Shocks(scene, 8)
+    shocks: new Shocks(scene, 8),
+    debris: new Debris(scene, 16),
+    flash: new Flash(scene, 3)
   };
 
   ctx.ship = new Ship(scene);
@@ -91,6 +112,18 @@ function init() {
   reflectSettings();
   applyQuality(save.settings.quality === 'auto' ? qualityClass() : save.settings.quality);
   if (isTouch) document.body.classList.add('touch');
+  document.body.classList.toggle('lefty', save.settings.lefty);
+
+  for (let i = 0; i < 24; i++) {
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.22, 3.4),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 2.6, 3.2), toneMapped: false })
+    );
+    mesh.visible = false;
+    scene.add(mesh);
+    const b = { mesh, pos: mesh.position, dir: new THREE.Vector3(0, 0, -1), life: 0, alive: false, dmg: 1 };
+    boltPool.push(b);
+  }
 
   addEventListener('resize', onResize);
   document.addEventListener('visibilitychange', () => {
@@ -121,21 +154,44 @@ function buildComposer(samples) {
   composer.addPass(new OutputPass());
 }
 
-function applyQuality(q) {
-  const pr = q === 'low' ? 1 : Math.min(devicePixelRatio, q === 'medium' ? 1.5 : 2);
+function basePixelRatio(q) {
+  if (q === 'low') return 1;
+  if (q === 'medium') return Math.min(devicePixelRatio, 1.5);
+  return Math.min(devicePixelRatio, 2);
+}
+
+function applyPixelRatio() {
+  const pr = basePr * drsScale;
   renderer.setPixelRatio(pr);
   renderer.setSize(innerWidth, innerHeight);
   composer.setPixelRatio(pr);
   composer.setSize(innerWidth, innerHeight);
+}
+
+function applyQuality(q) {
+  basePr = basePixelRatio(q);
+  drsScale = 1;
+  applyPixelRatio();
   bloomPass.enabled = q !== 'low';
   bloomPass.strength = q === 'high' ? 0.85 : 0.65;
+}
+
+function updateDRS(rawDt) {
+  frameEMA += (rawDt * 1000 - frameEMA) * 0.04;
+  drsTimer += rawDt;
+  if (drsTimer < 2) return;
+  drsTimer = 0;
+  if (ctx.save.settings.quality !== 'auto') return;
+  let changed = false;
+  if (frameEMA > 21 && drsScale > 0.6) { drsScale = Math.max(0.6, drsScale * 0.85); changed = true; }
+  else if (frameEMA < 13 && drsScale < 1) { drsScale = Math.min(1, drsScale * 1.1); changed = true; }
+  if (changed) applyPixelRatio();
 }
 
 function onResize() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  composer.setSize(innerWidth, innerHeight);
+  applyPixelRatio();
 }
 
 function bindCallbacks() {
@@ -145,9 +201,10 @@ function bindCallbacks() {
       state.maxCombo = Math.max(state.maxCombo, state.combo);
       state.mult = multOf();
       state.crystals++;
-      state.score += 150 * state.mult;
-      ctx.ui.popup('+150', 'cyan', e.mesh.position);
-      ctx.fx.expl.spawn(e.mesh.position, 0x46e8ff, 0.5);
+      state.score += 150 * state.mult * (state.mult2T > 0 ? 2 : 1);
+      tmpV1.set(e.x, e.y, e.z);
+      ctx.ui.popup('+' + Math.floor(150 * state.mult * (state.mult2T > 0 ? 2 : 1)), 'cyan', tmpV1);
+      ctx.fx.expl.spawn(tmpV1, 0x46e8ff, 0.5);
       ctx.audio.pickup(state.combo);
     },
     onGate: e => {
@@ -155,9 +212,9 @@ function bindCallbacks() {
       state.maxCombo = Math.max(state.maxCombo, state.combo);
       state.mult = multOf();
       state.gates++;
-      state.score += 350 * state.mult;
+      state.score += 350 * state.mult * (state.mult2T > 0 ? 2 : 1);
       state.energy = Math.min(100, state.energy + 16);
-      ctx.ui.popup('GATE +350', 'gold', e.mesh.position.clone().add(new THREE.Vector3(0, 4, 0)));
+      ctx.ui.popup('GATE +' + Math.floor(350 * state.mult), 'gold', e.mesh.position);
       ctx.fx.shocks.spawn(e.mesh.position, 0x57ff9a, 34);
       ctx.audio.gate();
     },
@@ -166,8 +223,9 @@ function bindCallbacks() {
       state.combo++;
       state.maxCombo = Math.max(state.maxCombo, state.combo);
       state.mult = multOf();
-      state.score += 75 * state.mult;
-      ctx.ui.popup('NEAR MISS +' + Math.floor(75 * state.mult), 'white', pos);
+      const val = Math.floor((type === 'comet' ? 150 : 75) * state.mult);
+      state.score += val;
+      ctx.ui.popup('NEAR MISS +' + val, 'white', pos);
       if (type === 'bh') ctx.ui.toast('CLOSE ONE — THAT WAS A BLACK HOLE');
     },
     onHitPlanet: n => {
@@ -178,10 +236,62 @@ function bindCallbacks() {
       ctx.fx.expl.spawn(ctx.ship.group.position, 0xffa050, 1.1);
       ctx.fx.shocks.spawn(ctx.ship.group.position, 0xffb060, 22);
     },
+    onDestroy: (e, cause) => {
+      tmpV1.set(e.x, e.y, e.z);
+      const power = Math.min(1.6, 0.5 + e.s * 0.18);
+      ctx.fx.expl.spawn(tmpV1, 0xffb060, power * 0.8);
+      ctx.fx.debris.spawn(tmpV1, Math.min(7, 3 + (e.s | 0)), power);
+      ctx.fx.flash.trigger(tmpV1, 0xffc890, power * 0.5);
+      ctx.fx.shocks.spawn(tmpV1, 0xffd0a0, e.s * 4);
+      ctx.audio.blip(110 + e.s * 22, 0.12, 'sawtooth', 0.16);
+      if (cause === 'bolt') {
+        state.kills++;
+        const val = Math.floor(30 * state.mult * (state.mult2T > 0 ? 2 : 1));
+        state.score += val;
+        ctx.ui.popup('+' + val, 'orange', tmpV1);
+        ctx.world.spawnDrop(tmpV1);
+      } else {
+        tmpV2.set(ctx.ship.group.position).sub(tmpV1).normalize();
+        ctx.ship.vel.addScaledVector(tmpV2, 42);
+        damage(14 + e.s * 3.5, 'ASTEROID IMPACT');
+        state.invuln = Math.max(state.invuln, 1.0);
+        state.trauma = Math.min(1, state.trauma + 0.55);
+      }
+    },
+    onBoltHit: e => {
+      if (e.kind === 'comet') ctx.fx.flash.trigger(e.mesh.position, 0x9fe8ff, 0.3);
+      else ctx.fx.flash.trigger(tmpV1.set(e.x, e.y, e.z), 0x9fe8ff, 0.3);
+      ctx.audio.blip(320, 0.05, 'square', 0.1);
+    },
+    onHitComet: e => {
+      ctx.fx.expl.spawn(e.mesh.position, 0xaef1ff, 1.2);
+      ctx.fx.shocks.spawn(e.mesh.position, 0xcfeaff, 26);
+      ctx.fx.flash.trigger(e.mesh.position, 0xbfe8ff, 0.8);
+      tmpV2.set(ctx.ship.group.position).sub(e.mesh.position).normalize();
+      ctx.ship.vel.addScaledVector(tmpV2, 50);
+      damage(30, 'COMET STRIKE');
+      state.trauma = Math.min(1, state.trauma + 0.6);
+    },
+    onCometKilled: e => {
+      state.kills++;
+      state.score += 120 * state.mult;
+      ctx.ui.popup('+' + Math.floor(120 * state.mult), 'cyan', e.mesh.position);
+      ctx.fx.expl.spawn(e.mesh.position, 0xaef1ff, 1.1);
+      ctx.fx.debris.spawn(e.mesh.position, 5, 1);
+      ctx.world.spawnDrop(e.mesh.position);
+    },
+    onPowerup: (kind, pos) => {
+      state.powerups++;
+      ctx.audio.powerup();
+      ctx.fx.shocks.spawn(pos, kind === 'shield' ? 0x4ab8ff : kind === 'repair' ? 0x57ff9a : kind === 'surge' ? 0xffd76b : 0xc07aff, 24);
+      if (kind === 'shield') { state.shield = Math.min(2, state.shield + 1); ctx.ui.popup('SHIELD +1', 'cyan', pos); }
+      else if (kind === 'repair') { state.hull = Math.min(state.maxHull, state.hull + 35); ctx.ui.popup('HULL +35', 'green', pos); }
+      else if (kind === 'surge') { state.energy = 100; state.overdriveT = 8; ctx.ui.popup('OVERDRIVE', 'gold', pos); }
+      else { state.mult2T = 12; ctx.ui.popup('SCORE x2', 'purple', pos); }
+    },
     onBHDeath: pos => startConsumption(pos),
     onEscape: () => {
       state.escapes++;
-      ctx.save.stats.escapes++;
       state.score += 400 * state.mult;
       ctx.ui.popup('WELL ESCAPED +' + Math.floor(400 * state.mult), 'gold', ctx.ship.group.position);
       ctx.ui.toast('GRAVITY WELL ESCAPED');
@@ -196,6 +306,15 @@ function multOf() {
 
 function damage(amount, label) {
   if (state.invuln > 0 || mode !== 'play') return;
+  if (state.shield > 0) {
+    state.shield--;
+    state.invuln = Math.max(state.invuln, 0.9);
+    ctx.ui.damageFlash();
+    ctx.audio.blip(520, 0.2, 'sine', 0.2);
+    ctx.fx.shocks.spawn(ctx.ship.group.position, 0x4ab8ff, 20);
+    ctx.ui.popup('SHIELD ABSORB', 'cyan', ctx.ship.group.position);
+    return;
+  }
   state.hull -= amount;
   state.damageTaken += amount;
   state.calm = 0;
@@ -204,7 +323,7 @@ function damage(amount, label) {
   ctx.ui.damageFlash();
   ctx.audio.explosion(false);
   ctx.ui.popup('-' + amount + ' HULL', 'red', ctx.ship.group.position);
-  if (label) ctx.ui.alertBanner(label);
+  if (label) ctx.ui.banner(label);
   if (state.hull <= 0) {
     state.hull = 0;
     die('HULL INTEGRITY LOST');
@@ -227,17 +346,22 @@ function die(causeText) {
   ctx.ship.setVisible(false);
   ctx.fx.trails.clear();
   ctx.fx.trails.setVisible(false);
+  if (ghostShip) ghostShip.setVisible(false);
   ctx.fx.expl.spawn(deathPos, 0xffc27d, 1.8);
   ctx.fx.shocks.spawn(deathPos, 0xffd9a0, 46);
+  ctx.fx.debris.spawn(deathPos, 8, 1.6);
+  ctx.fx.flash.trigger(deathPos, 0xffe0b0, 1.6);
   state.trauma = 1;
   state.slowT = 0.9;
   state.timeScale = 0.25;
   ctx.ui.setDanger(false);
+  ctx.ui.setLock(false);
   ctx.audio.alarm(false);
   ctx.audio.engineOff();
   ctx.audio.explosion(true);
   document.body.classList.remove('playing', 'critical');
   setTouchControls(false);
+  if (document.pointerLockElement) document.exitPointerLock();
 
   setTimeout(() => {
     if (mode === 'over' && runSeq === thisRun) finalizeRun(causeText);
@@ -248,7 +372,7 @@ function finalizeRun(causeText) {
   const save = ctx.save;
   const prevLevel = levelInfo(save.xp).level;
   const score = Math.floor(state.score);
-  const xpGained = Math.floor(score / 60) + state.crystals * 2 + state.gates * 6 + state.nearMisses;
+  const xpGained = Math.floor(score / 60) + state.crystals * 2 + state.gates * 6 + state.nearMisses + state.bonusXp;
   const prevXp = save.xp;
   save.xp += xpGained;
 
@@ -257,6 +381,7 @@ function finalizeRun(causeText) {
   save.bestDist = Math.max(save.bestDist, Math.floor(state.dist));
   save.bestCrystals = Math.max(save.bestCrystals, state.crystals);
   if (state.damageTaken === 0) save.flawless = Math.max(save.flawless, score);
+  if (state.objectives.length && state.objectives.every(o => o.done)) save.perfectObjectives++;
 
   save.stats.runs++;
   save.stats.crystals += state.crystals;
@@ -264,6 +389,19 @@ function finalizeRun(causeText) {
   save.stats.dist += Math.floor(state.dist);
   save.stats.nearMisses += state.nearMisses;
   save.stats.escapes += state.escapes;
+  save.stats.kills += state.kills;
+  save.stats.powerups += state.powerups;
+  save.stats.playtime += Math.floor(state.runTime);
+
+  const d = new Date();
+  const dateStr = d.getMonth() + 1 + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  save.runs.push({ score, dist: Math.floor(state.dist), date: dateStr });
+  save.runs.sort((a, b) => b.score - a.score);
+  save.runs = save.runs.slice(0, 10);
+
+  if (newBest && state.ghostRec && state.ghostRec.length > 4) {
+    save.ghost = { step: 10, pts: state.ghostRec.map(v => Math.round(v * 10) / 10) };
+  }
 
   const unlockedAch = evalAchievements();
   const newLevel = levelInfo(save.xp).level;
@@ -279,6 +417,7 @@ function finalizeRun(causeText) {
     score, best: save.best, newBest,
     dist: state.dist, crystals: state.crystals, gates: state.gates,
     nearMisses: state.nearMisses, maxCombo: state.maxCombo, escapes: state.escapes,
+    kills: state.kills, objectives: state.objectives,
     xpGained, prevXp, save, unlocks
   });
 }
@@ -307,20 +446,62 @@ function checkLiveAchievements() {
   }
 }
 
+function pickObjectives() {
+  const pool = [
+    { id: 'cry25', label: 'Collect 25 crystals', test: () => state.crystals >= 25 },
+    { id: 'gate4', label: 'Clear 4 gates', test: () => state.gates >= 4 },
+    { id: 'kill15', label: 'Destroy 15 asteroids', test: () => state.kills >= 15 },
+    { id: 'near6', label: 'Score 6 near misses', test: () => state.nearMisses >= 6 },
+    { id: 'dist4k', label: 'Fly 4.0 km', test: () => state.dist >= 4000 },
+    { id: 'flaw4k', label: 'Reach 4 km undamaged', test: () => state.dist >= 4000 && state.damageTaken === 0 },
+    { id: 'score15k', label: 'Score 15,000 points', test: () => state.score >= 15000 },
+    { id: 'escape', label: 'Escape a gravity well', test: () => state.escapes >= 1 }
+  ];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+  }
+  return pool.slice(0, 3).map(o => ({ id: o.id, label: o.label, test: o.test, done: false }));
+}
+
+function checkObjectives() {
+  for (const o of state.objectives) {
+    if (!o.done && o.test()) {
+      o.done = true;
+      state.bonusXp += 400;
+      ctx.ui.toast('OBJECTIVE COMPLETE — ' + o.label.toUpperCase() + ' (+400 XP)');
+      ctx.audio.objective();
+    }
+  }
+}
+
 function resetRunStats() {
   const lvl = levelInfo(ctx.save.xp).level;
   Object.assign(state, {
     speed: 0, dist: 0, score: 0, combo: 0, mult: 1, crystals: 0, gates: 0,
     nearMisses: 0, maxCombo: 0, escapes: 0, energy: 100,
     rollT: 0, rollCd: 0, invuln: 0, calm: 0, edgeT: 0,
-    trauma: 0, timeScale: 1, slowT: 0, bhDanger: null, damageTaken: 0, consuming: false
+    trauma: 0, timeScale: 1, slowT: 0, bhDanger: null, damageTaken: 0, consuming: false,
+    heat: 0, overheat: 0, fireCd: 0, targetLock: false,
+    shield: 0, mult2T: 0, overdriveT: 0,
+    sector: 0, kills: 0, powerups: 0, runTime: 0, bonusXp: 0
   });
   state.maxHull = 100 + Math.min(60, (lvl - 1) * 5);
   state.hull = state.maxHull;
+  state.sectorName = 'SECTOR 1 — ' + SECTOR_NAMES[0];
+  state.objectives = pickObjectives();
+  state.ghostRec = [];
   state.steer.tx = state.steer.ty = 0;
   state.steer.x = state.steer.y = 0;
   input.tx = input.ty = 0;
+  input.stickX = 0; input.stickY = 0;
   consume = null;
+  for (const b of boltPool) { b.alive = false; b.mesh.visible = false; }
+  if (ghostShip) ghostShip.setVisible(false);
+  ctx.fx.neb.setPalette(NEBULA_PALETTES[0]);
+  ctx.ui.setDanger(false);
+  ctx.ui.setLock(false);
+  ctx.ui.lastChipStr = '';
 }
 
 function toMenu() {
@@ -331,6 +512,7 @@ function toMenu() {
   ctx.fx.trails.clear();
   ctx.fx.trails.setVisible(true);
   ctx.ui.setDanger(false);
+  ctx.ui.setLock(false);
   ctx.audio.alarm(false);
   ctx.audio.engineOff();
   ctx.ui.showHud(false);
@@ -338,6 +520,7 @@ function toMenu() {
   ctx.ui.refreshMenu(ctx.save);
   document.body.classList.remove('playing', 'critical', 'danger');
   setTouchControls(false);
+  if (ghostShip) ghostShip.setVisible(false);
 }
 
 function openHangar() {
@@ -346,6 +529,11 @@ function openHangar() {
   ctx.world.reset();
   ctx.ui.renderHangar(ctx.save, actEquip, actPreview);
   ctx.ui.layer('menu-hangar');
+}
+
+function openProfile() {
+  ctx.ui.renderProfile(ctx.save);
+  ctx.ui.layer('menu-profile');
 }
 
 function actEquip(s) {
@@ -388,6 +576,7 @@ function pauseGame() {
   if (mode !== 'play' && mode !== 'count') return;
   prevPauseMode = mode;
   mode = 'pause';
+  ctx.ui.renderObjectives(document.getElementById('pause-objectives'), state.objectives);
   ctx.ui.layer('pause-overlay');
   ctx.audio.alarm(false);
   ctx.ui.setDanger(false);
@@ -403,12 +592,14 @@ function resumeGame() {
 function quitToMenu() {
   ctx.audio.alarm(false);
   ctx.ui.setDanger(false);
+  if (document.pointerLockElement) document.exitPointerLock();
   toMenu();
 }
 
 const actions = {
   play: () => { ctx.audio.init(); ctx.audio.click(); startRun(); },
   hangar: () => { ctx.audio.click(); openHangar(); },
+  profile: () => { ctx.audio.click(); openProfile(); },
   ach: () => { ctx.audio.click(); ctx.ui.renderAch(ctx.save); ctx.ui.layer('menu-ach'); },
   help: () => { ctx.audio.click(); ctx.ui.layer('menu-help'); },
   settings: () => { ctx.audio.click(); ctx.ui.layer('menu-settings'); },
@@ -445,12 +636,15 @@ function bindActions() {
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
   on('btn-play', actions.play);
   on('btn-hangar', actions.hangar);
+  on('btn-profile', actions.profile);
   on('btn-ach', actions.ach);
   on('btn-help', actions.help);
   on('btn-settings', actions.settings);
   on('btn-full', actions.fullscreen);
+  on('btn-full-menu', actions.fullscreen);
   on('hangar-back', actions.back);
   on('ach-back', actions.back);
+  on('profile-back', actions.back);
   on('help-back', actions.back);
   on('settings-back', actions.back);
   on('btn-resume', actions.resume);
@@ -463,7 +657,6 @@ function bindActions() {
   on('over-menu', actions.overMenu);
   on('btn-pause', pauseToggleBtn);
   on('btn-mute', actions.muteToggle);
-  on('btn-full-menu', actions.fullscreen);
 
   const hold = (id, setter) => {
     const el = document.getElementById(id);
@@ -499,20 +692,60 @@ function bindActions() {
     ctx.save.settings.invertY = e.target.checked;
     persistSave(ctx.save);
   });
+  $s('set-invertx').addEventListener('change', e => {
+    ctx.save.settings.invertX = e.target.checked;
+    persistSave(ctx.save);
+  });
+  $s('set-shake').addEventListener('input', e => {
+    ctx.save.settings.shake = parseFloat(e.target.value);
+    persistSave(ctx.save);
+    const sv = document.getElementById('shake-val');
+    if (sv) sv.textContent = Math.round(parseFloat(e.target.value) * 100) + '%';
+  });
+  $s('set-autofire').addEventListener('change', e => {
+    ctx.save.settings.autofire = e.target.checked;
+    persistSave(ctx.save);
+  });
+  $s('set-lefty').addEventListener('change', e => {
+    ctx.save.settings.lefty = e.target.checked;
+    persistSave(ctx.save);
+    document.body.classList.toggle('lefty', e.target.checked);
+  });
+  $s('set-ghost').addEventListener('change', e => {
+    ctx.save.settings.ghost = e.target.checked;
+    persistSave(ctx.save);
+    if (!e.target.checked && ghostShip) ghostShip.setVisible(false);
+  });
+  for (const r of document.querySelectorAll('input[name="ctlmode"]')) {
+    r.addEventListener('change', e => {
+      if (!e.target.checked) return;
+      ctx.save.settings.controlMode = e.target.value;
+      persistSave(ctx.save);
+      if (e.target.value !== 'lock' && document.pointerLockElement) document.exitPointerLock();
+    });
+  }
 }
 
 function reflectSettings() {
   const s = ctx.save.settings;
-  const snd = document.getElementById('set-sound');
+  const set = (id, prop) => { const el = document.getElementById(id); if (el) el.checked = prop; };
+  set('set-sound', s.sound);
+  set('set-invert', s.invertY);
+  set('set-invertx', s.invertX);
+  set('set-autofire', s.autofire);
+  set('set-lefty', s.lefty);
+  set('set-ghost', s.ghost);
   const qual = document.getElementById('set-quality');
-  const sens = document.getElementById('set-sens');
-  const inv = document.getElementById('set-invert');
-  const sensVal = document.getElementById('sens-val');
-  if (snd) snd.checked = s.sound;
   if (qual) qual.value = s.quality;
+  const sens = document.getElementById('set-sens');
   if (sens) sens.value = s.sens;
-  if (inv) inv.checked = s.invertY;
+  const sensVal = document.getElementById('sens-val');
   if (sensVal) sensVal.textContent = parseFloat(s.sens).toFixed(1);
+  const shake = document.getElementById('set-shake');
+  if (shake) shake.value = s.shake;
+  const shakeVal = document.getElementById('shake-val');
+  if (shakeVal) shakeVal.textContent = Math.round(s.shake * 100) + '%';
+  for (const r of document.querySelectorAll('input[name="ctlmode"]')) r.checked = r.value === s.controlMode;
   const muteBtn = document.getElementById('btn-mute');
   if (muteBtn) muteBtn.textContent = s.sound ? 'AUDIO ON' : 'AUDIO OFF';
 }
@@ -526,8 +759,20 @@ function bindInput() {
   const reticle = document.getElementById('reticle');
 
   addEventListener('mousemove', e => {
+    if (input.locked) {
+      input.stickX = THREE.MathUtils.clamp(input.stickX + e.movementX * 0.0045, -1, 1);
+      input.stickY = THREE.MathUtils.clamp(input.stickY + e.movementY * 0.0045, -1, 1);
+      if (reticle) reticle.style.transform = 'translate(' + (innerWidth / 2) + 'px,' + (innerHeight / 2) + 'px)';
+      return;
+    }
     input.mx = (e.clientX / innerWidth) * 2 - 1;
     input.my = (e.clientY / innerHeight) * 2 - 1;
+    const cm = ctx.save ? ctx.save.settings.controlMode : 'aim';
+    if (cm === 'stick' && !isTouch) {
+      input.stickX = THREE.MathUtils.clamp(input.stickX + (e.movementX || 0) * 0.008, -1, 1);
+      input.stickY = THREE.MathUtils.clamp(input.stickY + (e.movementY || 0) * 0.008, -1, 1);
+      return;
+    }
     if (reticle) reticle.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)';
   });
 
@@ -544,6 +789,11 @@ function bindInput() {
       return;
     }
     e.preventDefault();
+    const cm = ctx.save.settings.controlMode;
+    if (cm === 'lock' && mode === 'play' && !input.locked) {
+      cv.requestPointerLock();
+      return;
+    }
     if (mode !== 'play') return;
     if (e.button === 0) state.boost = true;
     else if (e.button === 2) state.brake = true;
@@ -569,7 +819,27 @@ function bindInput() {
   addEventListener('pointerup', clearPointer);
   addEventListener('pointercancel', clearPointer);
 
+  document.addEventListener('pointerlockchange', () => {
+    input.locked = document.pointerLockElement === cv;
+    document.body.classList.toggle('locked', input.locked);
+    if (!input.locked && mode === 'play') pauseGame();
+  });
+
   addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('gamepadconnected', e => {
+    gp.on = true;
+    gp.index = e.gamepad.index;
+    ctx.ui.setGamepad(true);
+    ctx.ui.toast('GAMEPAD CONNECTED — ' + e.gamepad.id.slice(0, 28));
+  });
+  addEventListener('gamepaddisconnected', e => {
+    if (e.gamepad.index === gp.index) {
+      gp.on = false;
+      ctx.ui.setGamepad(false);
+      state.boost = false;
+      state.brake = false;
+    }
+  });
   addEventListener('keydown', e => {
     keys[e.code] = true;
     if (e.code === 'Space' && !e.repeat && mode === 'play') doRoll();
@@ -582,6 +852,36 @@ function bindInput() {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   });
   addEventListener('keyup', e => { keys[e.code] = false; });
+}
+
+function pollGamepad() {
+  if (!gp.on || !navigator.getGamepads) return null;
+  const pads = navigator.getGamepads();
+  const pad = pads && pads[gp.index];
+  if (!pad) return null;
+  const dz = v => Math.abs(v) < 0.14 ? 0 : (v - Math.sign(v) * 0.14) / 0.86;
+  const btn = i => !!(pad.buttons[i] && pad.buttons[i].pressed);
+  const out = {
+    x: dz(pad.axes[0] || 0),
+    y: dz(pad.axes[1] || 0),
+    boost: btn(7) || btn(0),
+    brake: btn(6) || btn(1),
+    roll: btn(2) || btn(5),
+    start: btn(9),
+    active: false
+  };
+  out.active = out.x !== 0 || out.y !== 0 || out.boost || out.brake || out.roll || out.start;
+  if (out.roll && !gp.prev.roll) doRoll();
+  if (out.start && !gp.prev.start) {
+    if (mode === 'play' || mode === 'count') pauseGame();
+    else if (mode === 'pause') resumeGame();
+  }
+  if (out.boost) state.boost = true;
+  else if (gp.prev.boost) state.boost = false;
+  if (out.brake) state.brake = true;
+  else if (gp.prev.brake) state.brake = false;
+  gp.prev = { roll: out.roll, start: out.start, boost: out.boost, brake: out.brake };
+  return out;
 }
 
 function doRoll() {
@@ -597,26 +897,118 @@ function doRoll() {
 function readSteerTargets() {
   const sens = ctx.save.settings.sens;
   const inv = ctx.save.settings.invertY ? -1 : 1;
-  let kx = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
-  let ky = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+  const invX = ctx.save.settings.invertX ? -1 : 1;
+  const cm = ctx.save.settings.controlMode;
+  const pad = pollGamepad();
+
   if (mode === 'attract') {
     state.steer.tx = Math.sin(elapsed * 0.5) * 0.45;
     state.steer.ty = Math.sin(elapsed * 0.37) * 0.26;
     return;
   }
+
+  if (pad && pad.active) {
+    state.steer.tx = THREE.MathUtils.clamp(pad.x * sens, -1, 1) * invX;
+    state.steer.ty = THREE.MathUtils.clamp(pad.y * inv * sens, -1, 1);
+    return;
+  }
   if (input.touchId !== null) {
-    state.steer.tx = input.tx * sens;
+    state.steer.tx = input.tx * sens * invX;
     state.steer.ty = input.ty * inv * sens;
-  } else if (kx !== 0 || ky !== 0) {
-    state.steer.tx = kx * 0.85;
+    return;
+  }
+  const kx = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
+  const ky = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+  if (kx !== 0 || ky !== 0) {
+    state.steer.tx = kx * 0.85 * invX;
     state.steer.ty = ky * 0.85 * inv;
-  } else if (!isTouch) {
+    return;
+  }
+  if (cm === 'lock' || cm === 'stick') {
+    state.steer.tx = THREE.MathUtils.clamp(input.stickX * 1.6 * sens, -1, 1) * invX;
+    state.steer.ty = THREE.MathUtils.clamp(input.stickY * 1.4 * inv * sens, -1, 1);
+    const decay = Math.exp(-(cm === 'lock' ? 1.4 : 2.6) * lastDt);
+    input.stickX *= decay;
+    input.stickY *= decay;
+    return;
+  }
+  if (!isTouch) {
     const dz = 0.06;
     let nx = Math.abs(input.mx) < dz ? 0 : input.mx - Math.sign(input.mx) * dz;
     let ny = Math.abs(input.my) < dz ? 0 : input.my - Math.sign(input.my) * dz;
     nx /= (1 - dz); ny /= (1 - dz);
-    state.steer.tx = THREE.MathUtils.clamp(nx * 1.35 * sens, -1, 1);
+    state.steer.tx = THREE.MathUtils.clamp(nx * 1.35 * sens, -1, 1) * invX;
     state.steer.ty = THREE.MathUtils.clamp(ny * 1.15 * inv * sens, -1, 1);
+  }
+}
+
+function updateWeapons(dt) {
+  state.fireCd = Math.max(0, state.fireCd - dt);
+  state.heat = Math.max(0, state.heat - dt * 0.3);
+  if (state.overheat > 0) {
+    state.overheat -= dt;
+    ctx.ui.setLock(false);
+    state.targetLock = false;
+    return;
+  }
+  if (mode !== 'play' || !ctx.save.settings.autofire) {
+    ctx.ui.setLock(false);
+    state.targetLock = false;
+    return;
+  }
+
+  camera.getWorldDirection(tmpV3);
+  let best = null, bestCos = 0.994;
+  const shipPos = ctx.ship.group.position;
+  const consider = (x, y, z) => {
+    tmpV1.set(x - shipPos.x, y - shipPos.y, z - shipPos.z);
+    const d = tmpV1.length();
+    if (d < 12 || d > 760) return;
+    const c = tmpV1.dot(tmpV3) / d;
+    if (c > bestCos) { bestCos = c; best = tmpV2.set(x, y, z).clone(); }
+  };
+  for (const e of ctx.world.asts) {
+    if (e.alive && e.z < shipPos.z) consider(e.x, e.y, e.z);
+  }
+  for (const e of ctx.world.comets) {
+    if (e.alive && e.mesh.position.z < shipPos.z) consider(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+  }
+
+  if (!best) {
+    ctx.ui.setLock(false);
+    state.targetLock = false;
+    return;
+  }
+  state.targetLock = true;
+  ctx.ui.setLock(true);
+  if (state.fireCd > 0) return;
+
+  const b = boltPool.find(x => !x.alive);
+  if (!b) return;
+  tmpV1.set(0, 0.15, -2.6).applyMatrix4(ctx.ship.group.matrixWorld);
+  b.pos.copy(tmpV1);
+  b.dir.copy(best).sub(tmpV1).normalize();
+  b.life = 1.1;
+  b.alive = true;
+  b.mesh.visible = true;
+  b.mesh.quaternion.setFromUnitVectors(tmpV2.set(0, 0, -1), b.dir);
+  state.fireCd = 0.18;
+  state.heat = Math.min(1, state.heat + 0.085);
+  if (state.heat >= 1) {
+    state.overheat = 1.7;
+    ctx.audio.overheat();
+  } else {
+    ctx.audio.laser();
+  }
+  ctx.fx.flash.trigger(tmpV1, 0x6ae8ff, 0.35);
+}
+
+function updateBolts(dt) {
+  for (const b of boltPool) {
+    if (!b.alive) { b.mesh.visible = false; continue; }
+    b.pos.addScaledVector(b.dir, 900 * dt);
+    b.life -= dt;
+    if (b.life <= 0 || b.pos.z < ctx.ship.group.position.z - 1700) b.alive = false;
   }
 }
 
@@ -674,24 +1066,75 @@ function flightPhysics(dt) {
     inner.rotation.z = bankT + state.rollDir * p * Math.PI * 2;
     if (state.rollT <= 0) inner.rotation.z = bankT;
   }
+  ctx.ship.blinkNav(elapsed);
+  ctx.ship.setShield(state.shield > 0, elapsed);
   ctx.ship.setVisible(!(state.invuln > 0 && Math.floor(elapsed * 14) % 2 === 0 && mode === 'play'));
 }
 
-function playSim(dt) {
+function updateSectors() {
+  const sector = Math.floor(state.dist / 4000);
+  if (sector !== state.sector) {
+    state.sector = sector;
+    state.sectorName = 'SECTOR ' + (sector + 1) + ' — ' + SECTOR_NAMES[sector % SECTOR_NAMES.length];
+    ctx.fx.neb.setPalette(NEBULA_PALETTES[sector % NEBULA_PALETTES.length]);
+    ctx.ui.banner('ENTERING ' + state.sectorName);
+    ctx.audio.sectorSfx();
+  }
+}
+
+function updateGhost(dt) {
+  if (!ctx.save.settings.ghost) return;
+  if (ctx.save.ghost && ghostShip && mode === 'play') {
+    const pts = ctx.save.ghost.pts;
+    const idx = state.dist / 10;
+    if (idx < pts.length / 2 - 1) {
+      const i = idx | 0;
+      const f = idx - i;
+      const x = pts[i * 2] + (pts[(i + 1) * 2] - pts[i * 2]) * f;
+      const y = pts[i * 2 + 1] + (pts[(i + 1) * 2 + 1] - pts[i * 2 + 1]) * f;
+      ghostShip.group.position.set(x, y, 0);
+      ghostShip.inner.rotation.y += dt * 0.5;
+      ghostShip.setVisible(true);
+    } else {
+      ghostShip.setVisible(false);
+    }
+  }
+  if (mode === 'play') {
+    const want = Math.floor(state.dist / 10) + 1;
+    while (state.ghostRec.length < want * 2 && state.ghostRec.length < 8000) {
+      const p = ctx.ship.group.position;
+      state.ghostRec.push(Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10);
+    }
+  }
+}
+
+function playSim(dt, rawDt) {
   state.dist += state.speed * dt;
+  state.runTime += rawDt;
   const base = 46 + Math.min(92, state.dist * 0.0042);
-  state.boostEff = state.boost && state.energy > 0.5 && !state.brake;
-  if (state.boostEff) state.energy = Math.max(0, state.energy - 26 * dt);
-  else state.energy = Math.min(100, state.energy + 11 * dt);
+  state.boostEff = state.boost && (state.energy > 0.5 || state.overdriveT > 0) && !state.brake;
+  if (state.boostEff && state.overdriveT <= 0) state.energy = Math.max(0, state.energy - 26 * dt);
+  else if (!state.boostEff) state.energy = Math.min(100, state.energy + 11 * dt);
+  state.overdriveT = Math.max(0, state.overdriveT - dt);
+  state.mult2T = Math.max(0, state.mult2T - dt);
   const target = base * (state.boostEff ? 1.8 : state.brake ? 0.42 : 1);
   state.speed += (target - state.speed) * Math.min(1, dt * 2.1);
-  state.score += state.speed * dt * 0.55 * state.mult;
+  state.score += state.speed * dt * 0.55 * state.mult * (state.mult2T > 0 ? 2 : 1);
 
   readSteerTargets();
   state.steer.x += (state.steer.tx - state.steer.x) * Math.min(1, dt * 7);
   state.steer.y += (state.steer.ty - state.steer.y) * Math.min(1, dt * 7);
   flightPhysics(dt);
-  ctx.world.update(dt, false);
+  updateWeapons(dt);
+  updateBolts(dt);
+  activeBolts.length = 0;
+  for (const b of boltPool) if (b.alive) activeBolts.push(b);
+  ctx.world.update(dt, false, activeBolts);
+  for (const b of boltPool) if (!b.alive) b.mesh.visible = false;
+  updateSectors();
+  updateGhost(dt);
+  objTimer -= rawDt;
+  if (objTimer <= 0) { objTimer = 0.4; checkObjectives(); }
 
   const danger = state.bhDanger;
   const inDanger = !!danger && danger.d < danger.influence * 0.72;
@@ -699,13 +1142,14 @@ function playSim(dt) {
   ctx.audio.alarm(inDanger);
   if (danger && danger.d < danger.horizon * 4.5) state.trauma = Math.min(0.5, state.trauma + dt * 0.9);
 
-  ctx.ship.engineFlicker(
-    THREE.MathUtils.clamp((state.speed - 40) / 100, 0.15, 1),
-    state.boostEff, elapsed
-  );
+  const throttle = THREE.MathUtils.clamp((state.speed - 40) / 100, 0.15, 1);
+  ctx.ship.engineFlicker(throttle, state.boostEff, elapsed);
   ctx.fx.trails.push();
   ctx.audio.setThrottle(THREE.MathUtils.clamp((state.speed - 40) / 100, 0, 1), state.boostEff);
 }
+
+let objTimer = 0;
+let lastDt = 0.016;
 
 function attractSim(dt) {
   const targetSpeed = ctx.view === 'orbit' ? 12 : 30;
@@ -714,7 +1158,7 @@ function attractSim(dt) {
   state.steer.x += (state.steer.tx - state.steer.x) * Math.min(1, dt * 5);
   state.steer.y += (state.steer.ty - state.steer.y) * Math.min(1, dt * 5);
   flightPhysics(dt);
-  ctx.world.update(dt, true);
+  ctx.world.update(dt, true, null);
   ctx.ship.engineFlicker(0.35, false, elapsed);
   ctx.fx.trails.push();
 }
@@ -725,7 +1169,7 @@ function countSim(dt, rawDt) {
   state.steer.x += (0 - state.steer.x) * Math.min(1, dt * 5);
   state.steer.y += (0 - state.steer.y) * Math.min(1, dt * 5);
   flightPhysics(dt);
-  ctx.world.update(dt, true);
+  ctx.world.update(dt, true, null);
   ctx.ship.engineFlicker(0.3, false, elapsed);
   ctx.fx.trails.push();
   cd -= rawDt;
@@ -745,7 +1189,7 @@ function countSim(dt, rawDt) {
 
 function overSim(dt) {
   state.speed += (10 - state.speed) * Math.min(1, dt * 1.5);
-  ctx.world.update(dt, true);
+  ctx.world.update(dt, true, null);
 }
 
 function cameraUpdate(rawDt) {
@@ -755,26 +1199,25 @@ function cameraUpdate(rawDt) {
 
   if (ctx.view === 'orbit' && mode === 'attract') {
     const a = elapsed * 0.42;
-    targetPos = new THREE.Vector3(pos.x + Math.sin(a) * 9.5, pos.y + 2.6, pos.z + Math.cos(a) * 9.5);
-    lookAt = pos.clone().add(new THREE.Vector3(0, 0.4, 0));
+    targetPos = tmpV1.set(pos.x + Math.sin(a) * 9.5, pos.y + 2.6, pos.z + Math.cos(a) * 9.5);
     camera.position.lerp(targetPos, 1 - Math.exp(-3 * rawDt));
-    camera.lookAt(lookAt);
+    camera.lookAt(tmpV2.set(pos.x, pos.y + 0.4, pos.z));
     return;
   }
 
   if (mode === 'over') {
     const a = elapsed * 0.25;
-    targetPos = new THREE.Vector3(deathPos.x + Math.sin(a) * 16, deathPos.y + 4, deathPos.z + Math.cos(a) * 16 + 6);
+    targetPos = tmpV1.set(deathPos.x + Math.sin(a) * 16, deathPos.y + 4, deathPos.z + Math.cos(a) * 16 + 6);
     camera.position.lerp(targetPos, 1 - Math.exp(-1.6 * rawDt));
     camera.lookAt(deathPos);
   } else {
-    targetPos = new THREE.Vector3(
+    targetPos = tmpV1.set(
       pos.x + vel.x * 0.055,
       pos.y + 4.3 + vel.y * 0.05,
       pos.z + 13.6
     );
     camera.position.lerp(targetPos, 1 - Math.exp(-5.5 * rawDt));
-    lookAt = new THREE.Vector3(pos.x + vel.x * 0.28, pos.y + vel.y * 0.22 + 0.6, pos.z - 42);
+    lookAt = tmpV2.set(pos.x + vel.x * 0.28, pos.y + vel.y * 0.22 + 0.6, pos.z - 42);
     camera.lookAt(lookAt);
     camera.rotateZ(ctx.ship.inner.rotation.z * 0.08);
   }
@@ -785,7 +1228,7 @@ function cameraUpdate(rawDt) {
 
   if (state.trauma > 0) {
     state.trauma = Math.max(0, state.trauma - rawDt * 1.7);
-    const s = state.trauma * state.trauma * 1.5;
+    const s = state.trauma * state.trauma * 1.5 * ctx.save.settings.shake;
     camera.position.x += (Math.random() - 0.5) * s;
     camera.position.y += (Math.random() - 0.5) * s;
     camera.rotateZ((Math.random() - 0.5) * s * 0.04);
@@ -794,12 +1237,15 @@ function cameraUpdate(rawDt) {
 
 function loop() {
   const rawDt = Math.min(clock.getDelta(), 0.05);
+  lastDt = rawDt;
   elapsed += rawDt;
 
   if (mode === 'pause') {
     composer.render();
     return;
   }
+  updateDRS(rawDt);
+
   if (state.slowT > 0) {
     state.slowT -= rawDt;
     if (state.slowT <= 0) state.timeScale = 1;
@@ -808,7 +1254,7 @@ function loop() {
 
   if (mode === 'attract') attractSim(dt);
   else if (mode === 'count') countSim(dt, rawDt);
-  else if (mode === 'play') playSim(dt);
+  else if (mode === 'play') playSim(dt, rawDt);
   else if (mode === 'over') overSim(dt);
 
   if (state.consuming && consume) {
@@ -829,16 +1275,22 @@ function loop() {
   }
 
   ctx.fx.stars.update(camera.position, elapsed);
-  ctx.fx.neb.update(camera.position, elapsed);
+  ctx.fx.neb.update(camera.position, elapsed, rawDt);
   ctx.fx.dust.update(camera.position, THREE.MathUtils.clamp((state.speed - 30) / 110, 0, 1), state.boostEff);
   ctx.fx.expl.update(rawDt);
   ctx.fx.shocks.update(rawDt, camera);
+  ctx.fx.debris.update(rawDt);
+  ctx.fx.flash.update(rawDt);
 
   cameraUpdate(rawDt);
 
   if (mode === 'play' || mode === 'count') {
-    ctx.ui.updateHUD(state);
-    ctx.ui.drawRadar(ctx.world.radarData);
+    ctx.ui.updateHUD(state, performance.now());
+    radarT -= rawDt;
+    if (radarT <= 0) {
+      radarT = 0.05;
+      ctx.ui.drawRadar(ctx.world.radarData);
+    }
   }
 
   composer.render();
@@ -854,7 +1306,12 @@ window.__vrDebug = () => ({
   speed: Math.round(state.speed),
   dist: Math.floor(state.dist),
   cd: Math.round(cd * 10) / 10,
-  fpsTarget: !!renderer
+  heat: Math.round(state.heat * 100),
+  sector: state.sector,
+  shield: state.shield,
+  kills: state.kills,
+  objectives: state.objectives.map(o => o.done).join(','),
+  bolts: boltPool.filter(b => b.alive).length
 });
 
 init();

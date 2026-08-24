@@ -3,6 +3,8 @@ import { NOISE_GLSL } from './fx.js';
 
 export const SPAWN_Z = -1550;
 export const DESPAWN_Z = 70;
+export const MAX_AST = 150;
+export const MAX_CRY = 110;
 
 const PLANET_PALETTES = [
   ['#7a5c3a', '#a5793f', '#5d4426'],
@@ -12,6 +14,13 @@ const PLANET_PALETTES = [
   ['#7a6a8a', '#a894bd', '#514361'],
   ['#b09060', '#d9bc85', '#7d6438']
 ];
+
+const PUP_DEFS = {
+  shield: { color: '#4ab8ff', label: 'SHIELD' },
+  repair: { color: '#57ff9a', label: 'REPAIR' },
+  surge:  { color: '#ffd76b', label: 'SURGE' },
+  multi:  { color: '#c07aff', label: 'SCORE x2' }
+};
 
 function planetTexture(seed) {
   const c = document.createElement('canvas');
@@ -79,6 +88,23 @@ function glowSprite(colorHex, scale) {
   return sp;
 }
 
+function makeLabel(text, colorHex) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.font = '700 30px Orbitron, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.shadowColor = colorHex;
+  g.shadowBlur = 12;
+  g.fillStyle = '#ffffff';
+  g.fillText(text, 128, 34);
+  const tex = new THREE.CanvasTexture(c);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sp.scale.set(8, 2, 1);
+  return sp;
+}
+
 function displacedRock() {
   const geo = new THREE.IcosahedronGeometry(1, 1);
   const pos = geo.attributes.position;
@@ -117,6 +143,27 @@ void main(){
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
+const ORBIT_VERT = `
+attribute float aR; attribute float aA; attribute float aY; attribute float aS;
+uniform float uTime;
+varying float vFade;
+void main(){
+  float ang = aA + uTime * aS;
+  vec3 p = vec3(cos(ang)*aR, aY, sin(ang)*aR);
+  vFade = 0.5 + 0.5*sin(ang*2.0 + aA*7.0);
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  gl_Position = projectionMatrix * mv;
+  gl_PointSize = 2.2 * (300.0 / max(-mv.z, 1.0));
+}`;
+
+const ORBIT_FRAG = `
+varying float vFade;
+void main(){
+  vec2 uv = gl_PointCoord - 0.5;
+  float a = smoothstep(0.5, 0.1, length(uv));
+  gl_FragColor = vec4(1.0, 0.62, 0.3, a * 0.55 * vFade);
+}`;
+
 function makeBH(horizon) {
   const group = new THREE.Group();
   const core = new THREE.Mesh(
@@ -148,6 +195,33 @@ function makeBH(horizon) {
   disk.rotation.x = -Math.PI / 2 + 0.22;
   group.add(disk);
 
+  const orbitGeo = new THREE.BufferGeometry();
+  const N = 130;
+  const aR = new Float32Array(N), aA = new Float32Array(N), aY = new Float32Array(N), aS = new Float32Array(N);
+  const posArr = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    aR[i] = horizon * (1.35 + Math.random() * 1.5);
+    aA[i] = Math.random() * Math.PI * 2;
+    aY[i] = (Math.random() - 0.5) * horizon * 0.35;
+    aS[i] = (0.6 + Math.random() * 1.4) * (horizon * 1.35) / aR[i];
+  }
+  orbitGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  orbitGeo.setAttribute('aR', new THREE.BufferAttribute(aR, 1));
+  orbitGeo.setAttribute('aA', new THREE.BufferAttribute(aA, 1));
+  orbitGeo.setAttribute('aY', new THREE.BufferAttribute(aY, 1));
+  orbitGeo.setAttribute('aS', new THREE.BufferAttribute(aS, 1));
+  const orbits = new THREE.Points(orbitGeo, new THREE.ShaderMaterial({
+    vertexShader: ORBIT_VERT,
+    fragmentShader: ORBIT_FRAG,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 } }
+  }));
+  orbits.frustumCulled = false;
+  orbits.rotation.x = -Math.PI / 2 + 0.22;
+  group.add(orbits);
+
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({
     map: haloTexture(), transparent: true, opacity: 0.85,
     depthWrite: false, blending: THREE.AdditiveBlending
@@ -155,7 +229,7 @@ function makeBH(horizon) {
   halo.scale.setScalar(horizon * 8.5);
   group.add(halo);
 
-  return { group, diskMat };
+  return { group, diskMat, orbitMat: orbits.material };
 }
 
 function makePlanet(radius, seed) {
@@ -239,39 +313,73 @@ export class World {
   constructor(ctx) {
     this.ctx = ctx;
     this.scene = ctx.scene;
-    this.entities = [];
-    this.pools = {};
     this.frontier = -420;
     this.spawnedCount = 0;
     this.radarData = [];
     this.elapsed = 0;
+    this.planetSeed = 1;
 
-    this.rocks = [displacedRock(), displacedRock(), displacedRock()];
+    this.rockGeo = displacedRock();
     this.rockMat = new THREE.MeshStandardMaterial({ color: 0x8a7f72, roughness: 0.95, metalness: 0.05, flatShading: true });
-    this.crystalGeo = new THREE.OctahedronGeometry(1.15, 0);
+    this.astMesh = new THREE.InstancedMesh(this.rockGeo, this.rockMat, MAX_AST);
+    this.astMesh.frustumCulled = false;
+    this.astMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.astMesh.count = 0;
+    this.scene.add(this.astMesh);
+
     this.crystalMat = new THREE.MeshStandardMaterial({
       color: 0x18e0ff, emissive: 0x2ae8ff, emissiveIntensity: 2.6,
       roughness: 0.15, metalness: 0.1
     });
+    this.cryMesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1.15, 0), this.crystalMat, MAX_CRY);
+    this.cryMesh.frustumCulled = false;
+    this.cryMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.cryMesh.count = 0;
+    this.scene.add(this.cryMesh);
+
+    this.asts = [];
+    this.crys = [];
+    this.pups = [];
+    this.comets = [];
+    this.gates = [];
+    this.planets = [];
+    this.bhs = [];
+    this.pools = { gate: [], planet: [], bh: [], pup: [], comet: [] };
+
+    this._m = new THREE.Matrix4();
+    this._q = new THREE.Quaternion();
+    this._e = new THREE.Euler();
+    this._v = new THREE.Vector3();
+    this._s = new THREE.Vector3();
+
     this.gateGeo = new THREE.TorusGeometry(16, 1.05, 10, 48);
     this.gateMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.35, 2.2, 0.9), toneMapped: false });
-    this.planetSeed = 1;
+    this.pupGeos = {
+      shield: new THREE.IcosahedronGeometry(1.5, 1),
+      repair: new THREE.OctahedronGeometry(1.5, 0),
+      surge: new THREE.OctahedronGeometry(1.2, 0),
+      multi: new THREE.TetrahedronGeometry(1.7, 0)
+    };
+    this.pupMats = {};
+    for (const k in PUP_DEFS) {
+      this.pupMats[k] = new THREE.MeshBasicMaterial({ color: new THREE.Color(PUP_DEFS[k].color), toneMapped: false });
+    }
+    this.cometGeo = displacedRock();
+    this.cometMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, emissive: 0x6fc8ff, emissiveIntensity: 1.6, roughness: 0.6, flatShading: true });
+    this.tailLen = 18;
   }
 
-  acquire(type) {
-    const pool = this.pools[type] || (this.pools[type] = []);
+  acquire(list, poolKey, maker) {
+    const pool = this.pools[poolKey];
     let e = pool.find(p => !p.alive);
     if (!e) {
-      e = this.factories[type]();
+      e = maker();
       this.scene.add(e.mesh);
       pool.push(e);
     }
     e.alive = true;
     e.mesh.visible = true;
-    e.prevRel = null;
-    e.passed = false;
-    e.pulling = false;
-    this.entities.push(e);
+    list.push(e);
     return e;
   }
 
@@ -280,31 +388,129 @@ export class World {
     e.mesh.visible = false;
   }
 
-  factories = {
-    ast: () => {
-      const mesh = new THREE.Mesh(this.rocks[(Math.random() * 3) | 0], this.rockMat);
-      return { type: 'ast', mesh, r: 3, scale: 1, vx: 0, vy: 0, rv: 0 };
-    },
-    cry: () => {
-      const mesh = new THREE.Mesh(this.crystalGeo, this.crystalMat);
-      const glow = glowSprite('rgba(70,230,255,0.55)', 7);
-      mesh.add(glow);
-      return { type: 'cry', mesh, r: 2.4, baseY: 0, phase: 0 };
-    },
-    gate: () => ({ type: 'gate', mesh: new THREE.Mesh(this.gateGeo, this.gateMat), r: 16 }),
-    planet: () => {
-      const built = makePlanet(30, 1);
-      return { type: 'planet', mesh: built.group, body: built.body, rings: built.rings, moon: built.moon, moonR: built.moonR, r: 30 };
-    },
-    bh: () => {
-      const built = makeBH(13);
-      return { type: 'bh', mesh: built.group, diskMat: built.diskMat, r: 13, horizon: 13, influence: 230 };
+  makeGate() {
+    return { kind: 'gate', mesh: new THREE.Mesh(this.gateGeo, this.gateMat), r: 16, prevRel: null, passed: false, alive: false };
+  }
+
+  makePlanet() {
+    const built = makePlanet(30, 1);
+    return { kind: 'planet', mesh: built.group, body: built.body, rings: built.rings, moon: built.moon, moonR: built.moonR, r: 30, prevRel: null, alive: false };
+  }
+
+  makeBH() {
+    const built = makeBH(13);
+    return { kind: 'bh', mesh: built.group, diskMat: built.diskMat, orbitMat: built.orbitMat, r: 13, horizon: 13, influence: 235, prevRel: null, pulling: false, alive: false };
+  }
+
+  makePup() {
+    const mesh = new THREE.Group();
+    return { kind: 'pup', ptype: 'shield', mesh, core: null, label: null, spin: 0, alive: false };
+  }
+
+  makeComet() {
+    const mesh = new THREE.Group();
+    const head = new THREE.Mesh(this.cometGeo, this.cometMat);
+    head.scale.setScalar(1.6);
+    mesh.add(head);
+    const glow = glowSprite('rgba(160,225,255,0.75)', 10);
+    mesh.add(glow);
+    const tailGeo = new THREE.BufferGeometry();
+    tailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.tailLen * 3), 3));
+    const tail = new THREE.Line(tailGeo, new THREE.LineBasicMaterial({
+      color: 0x9fd8ff, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    tail.frustumCulled = false;
+    this.scene.add(tail);
+    return { kind: 'comet', mesh, head, tail, ring: new Float32Array(this.tailLen * 3), tHead: 0, tCount: 0, vel: new THREE.Vector3(), hp: 2, r: 3.4, prevRel: null, alive: false };
+  }
+
+  spawnAsteroid(x, y, z, s, vx, vy, rv, hp) {
+    if (this.asts.length >= MAX_AST) {
+      const idx = this.asts.findIndex(a => !a.alive);
+      if (idx === -1) return null;
+      this.asts.splice(idx, 1);
     }
-  };
+    const dead = this.asts.find(a => !a.alive);
+    const e = dead || { alive: false };
+    e.alive = true;
+    e.x = x; e.y = y; e.z = z;
+    e.s = s; e.r = s * 1.12;
+    e.vx = vx; e.vy = vy;
+    e.rx = Math.random() * 3; e.ry = Math.random() * 3; e.rz = Math.random() * 3;
+    e.rv = rv;
+    e.hp = hp || 1;
+    e.prevRel = null;
+    if (!dead) this.asts.push(e);
+    return e;
+  }
+
+  spawnCrystal(x, y, z, vx = 0, vy = 0) {
+    if (this.crys.length >= MAX_CRY) {
+      const idx = this.crys.findIndex(c => !c.alive);
+      if (idx === -1) return null;
+      this.crys.splice(idx, 1);
+    }
+    const dead = this.crys.find(c => !c.alive);
+    const e = dead || { alive: false };
+    e.alive = true;
+    e.x = x; e.y = y; e.z = z;
+    e.baseY = y;
+    e.phase = Math.random() * 6.28;
+    e.vx = vx; e.vy = vy;
+    if (!dead) this.crys.push(e);
+    return e;
+  }
+
+  spawnPup(x, y, z, kind) {
+    const e = this.acquire(this.pups, 'pup', () => this.makePup());
+    e.ptype = kind;
+    while (e.mesh.children.length) e.mesh.remove(e.mesh.children[0]);
+    e.core = new THREE.Mesh(this.pupGeos[kind], this.pupMats[kind]);
+    e.mesh.add(e.core);
+    e.glow = glowSprite(this.rgba(PUP_DEFS[kind].color, 0.5), 9);
+    e.mesh.add(e.glow);
+    if (e.label) e.mesh.remove(e.label);
+    e.label = makeLabel(PUP_DEFS[kind].label, PUP_DEFS[kind].color);
+    e.label.position.set(0, 2.6, 0);
+    e.mesh.add(e.label);
+    e.mesh.position.set(x, y, z);
+    e.spin = 1.2 + Math.random();
+    e.prevRel = null;
+    return e;
+  }
+
+  rgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+
+  spawnComet(x, y, z) {
+    const e = this.acquire(this.comets, 'comet', () => this.makeComet());
+    e.mesh.position.set(x, y, z);
+    e.vel.set((Math.random() < 0.5 ? -1 : 1) * (26 + Math.random() * 40), (Math.random() - 0.5) * 30, 30 + Math.random() * 45);
+    e.hp = 2;
+    e.r = 3.4;
+    e.prevRel = null;
+    e.tHead = 0;
+    e.tCount = 0;
+    const arr = e.tail.geometry.attributes.position.array;
+    for (let i = 0; i < this.tailLen; i++) {
+      arr[i * 3] = x; arr[i * 3 + 1] = y; arr[i * 3 + 2] = z;
+      e.ring[i * 3] = x; e.ring[i * 3 + 1] = y; e.ring[i * 3 + 2] = z;
+    }
+    e.tail.geometry.attributes.position.needsUpdate = true;
+    return e;
+  }
 
   reset() {
-    for (const e of this.entities) this.release(e);
-    this.entities.length = 0;
+    this.asts.length = 0;
+    this.crys.length = 0;
+    for (const list of [this.pups, this.comets, this.gates, this.planets, this.bhs]) {
+      for (const e of list) this.release(e);
+      list.length = 0;
+    }
+    this.astMesh.count = 0;
+    this.cryMesh.count = 0;
     this.frontier = -420;
     this.spawnedCount = 0;
     this.radarData.length = 0;
@@ -316,15 +522,15 @@ export class World {
 
   pick(tier) {
     const w = [
-      [0.45, 0.35, 0.12, 0.08, 0.00],
-      [0.40, 0.28, 0.14, 0.12, 0.06],
-      [0.36, 0.24, 0.14, 0.14, 0.12],
-      [0.34, 0.22, 0.14, 0.14, 0.16],
-      [0.32, 0.20, 0.14, 0.14, 0.20]
+      [0.40, 0.34, 0.12, 0.08, 0.00, 0.04, 0.00],
+      [0.34, 0.26, 0.13, 0.11, 0.05, 0.05, 0.06],
+      [0.30, 0.22, 0.13, 0.12, 0.07, 0.05, 0.11],
+      [0.28, 0.20, 0.13, 0.12, 0.08, 0.05, 0.14],
+      [0.26, 0.18, 0.13, 0.12, 0.09, 0.05, 0.17]
     ][tier];
     if (this.spawnedCount < 3) return Math.random() < 0.6 ? 'cry' : 'ast';
     let roll = Math.random();
-    const names = ['ast', 'cry', 'gate', 'planet', 'bh'];
+    const names = ['ast', 'cry', 'gate', 'planet', 'comet', 'pup', 'bh'];
     for (let i = 0; i < names.length; i++) {
       roll -= w[i];
       if (roll <= 0) return names[i];
@@ -337,19 +543,14 @@ export class World {
     this.spawnedCount++;
     switch (kind) {
       case 'ast': {
-        if (Math.random() < 0.25 && tier > 0) { this.spawnWall(z); return 10; }
+        if (Math.random() < 0.25 && tier > 0) { this.spawnWall(z); return 12; }
         const n = 5 + tier * 2 + ((Math.random() * 4) | 0);
         for (let i = 0; i < n; i++) {
-          const e = this.acquire('ast');
           const s = 2.2 + Math.random() * 4.6;
-          e.scale = s;
-          e.r = s * 1.12;
-          e.mesh.scale.setScalar(s);
-          e.mesh.position.set((Math.random() - 0.5) * 280, (Math.random() - 0.5) * 175, z - Math.random() * 80);
-          e.vx = (Math.random() - 0.5) * 4;
-          e.vy = (Math.random() - 0.5) * 4;
-          e.rv = (Math.random() - 0.5) * 1.6;
-          e.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+          this.spawnAsteroid(
+            (Math.random() - 0.5) * 280, (Math.random() - 0.5) * 175, z - Math.random() * 80,
+            s, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 1.6
+          );
         }
         return 85;
       }
@@ -362,23 +563,22 @@ export class World {
         const ampY = 10 + Math.random() * 26;
         const ph = Math.random() * 6.28;
         for (let i = 0; i < n; i++) {
-          const e = this.acquire('cry');
           const x = THREE.MathUtils.clamp(x0 + Math.sin(i * 0.55 + ph) * ampX, -138, 138);
           const y = THREE.MathUtils.clamp(y0 + Math.cos(i * 0.42 + ph) * ampY, -86, 86);
-          e.mesh.position.set(x, y, z - i * 13);
-          e.baseY = y;
-          e.phase = ph + i;
+          this.spawnCrystal(x, y, z - i * 13);
         }
         return n * 13 + 20;
       }
       case 'gate': {
-        const e = this.acquire('gate');
+        const e = this.acquire(this.gates, 'gate', () => this.makeGate());
         e.r = 16;
+        e.passed = false;
+        e.prevRel = null;
         e.mesh.position.set((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 95, z);
         return 10;
       }
       case 'planet': {
-        const e = this.acquire('planet');
+        const e = this.acquire(this.planets, 'planet', () => this.makePlanet());
         this.planetSeed++;
         const dwarf = Math.random() < 0.28;
         const radius = dwarf ? 11 + Math.random() * 7 : 26 + Math.random() * 38;
@@ -387,6 +587,7 @@ export class World {
         const py = dwarf ? (Math.random() - 0.5) * 100 : (Math.random() - 0.5) * 160;
         e.mesh.position.set(px, py, z);
         e.r = radius;
+        e.prevRel = null;
         e.body.scale.setScalar(radius / 30);
         e.moonR = radius * 1.9;
         if (e.moon) e.moon.scale.setScalar(Math.max(0.5, radius / 30));
@@ -394,12 +595,27 @@ export class World {
         e.moonAng = Math.random() * 6.28;
         return radius * 2 + 24;
       }
+      case 'comet': {
+        const n = 1 + (Math.random() < 0.4 ? 1 : 0);
+        for (let i = 0; i < n; i++) {
+          this.spawnComet((Math.random() - 0.5) * 260, (Math.random() - 0.5) * 160, z - i * 60);
+        }
+        return 40 + n * 40;
+      }
+      case 'pup': {
+        const kinds = ['shield', 'repair', 'surge', 'multi'];
+        const k = kinds[(Math.random() * kinds.length) | 0];
+        this.spawnPup((Math.random() - 0.5) * 180, (Math.random() - 0.5) * 110, z, k);
+        return 20;
+      }
       case 'bh': {
-        const e = this.acquire('bh');
+        const e = this.acquire(this.bhs, 'bh', () => this.makeBH());
         const hz = 11 + Math.random() * 6;
         e.horizon = hz;
         e.r = hz;
         e.influence = 235;
+        e.pulling = false;
+        e.prevRel = null;
         e.diskMat.uniforms.uInner.value = hz * 1.25;
         e.diskMat.uniforms.uOuter.value = hz * 3.6;
         e.mesh.scale.setScalar(hz / 13);
@@ -419,15 +635,11 @@ export class World {
       for (let y = -91; y <= 91; y += 30) {
         if (Math.hypot(x - gapX, y - gapY) < gapR) continue;
         if (Math.random() < 0.12) continue;
-        const e = this.acquire('ast');
         const s = 4.6 + Math.random() * 2.6;
-        e.scale = s;
-        e.r = s * 1.1;
-        e.mesh.scale.setScalar(s);
-        e.mesh.position.set(x + (Math.random() - 0.5) * 8, y + (Math.random() - 0.5) * 8, z);
-        e.vx = 0; e.vy = 0;
-        e.rv = (Math.random() - 0.5) * 0.7;
-        e.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        this.spawnAsteroid(
+          x + (Math.random() - 0.5) * 8, y + (Math.random() - 0.5) * 8, z,
+          s, 0, 0, (Math.random() - 0.5) * 0.7
+        );
       }
     }
   }
@@ -438,14 +650,31 @@ export class World {
     const rr = 15 + Math.random() * 11;
     for (let i = 0; i < 10; i++) {
       const a = (i / 10) * Math.PI * 2;
-      const e = this.acquire('cry');
-      e.mesh.position.set(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, z);
-      e.baseY = cy + Math.sin(a) * rr;
-      e.phase = i * 0.7;
+      this.spawnCrystal(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, z);
     }
   }
 
-  update(dt, godmode) {
+  spawnDrop(pos) {
+    const roll = Math.random();
+    if (roll < 0.55) {
+      this.spawnCrystal(pos.x, pos.y, pos.z, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
+    } else if (roll < 0.85) {
+      const kinds = ['shield', 'repair', 'surge', 'multi'];
+      this.spawnPup(pos.x, pos.y, pos.z, kinds[(Math.random() * 4) | 0]);
+    }
+  }
+
+  killAst(e) {
+    e.alive = false;
+  }
+
+  killComet(e) {
+    e.alive = false;
+    e.mesh.visible = false;
+    e.tail.visible = false;
+  }
+
+  update(dt, godmode, bolts) {
     const st = this.ctx.state;
     const shipPos = this.ctx.ship.group.position;
     const shipR = this.ctx.ship.r;
@@ -459,129 +688,283 @@ export class World {
 
     this.radarData.length = 0;
     let nearestBH = null;
+    const boltStep = sp > 0 ? 900 * dt : 0;
 
-    for (let i = this.entities.length - 1; i >= 0; i--) {
-      const e = this.entities[i];
-      const p = e.mesh.position;
-      p.z += sp * dt;
-      let remove = false;
+    for (let i = this.asts.length - 1; i >= 0; i--) {
+      const e = this.asts[i];
+      if (!e.alive) { this.asts.splice(i, 1); continue; }
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+      e.z += sp * dt;
+      e.rx += e.rv * dt * 0.4;
+      e.ry += e.rv * dt * 0.6;
 
-      switch (e.type) {
-        case 'ast':
-          p.x += e.vx * dt;
-          p.y += e.vy * dt;
-          e.mesh.rotation.x += e.rv * dt * 0.4;
-          e.mesh.rotation.y += e.rv * dt * 0.6;
-          if (!godmode) {
-            const relA = p.z - shipPos.z;
-            if (e.prevRel !== null && e.prevRel < 0 && relA >= 0) {
-              const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
-              const hr = e.r + shipR;
-              if (dl > hr && dl < hr + 10) this.ctx.cb.onNearMiss(p, 'ast');
-            }
-            e.prevRel = relA;
-          }
-          break;
-
-        case 'cry': {
-          e.mesh.rotation.y += dt * 2.4;
-          p.y = e.baseY + Math.sin(this.elapsed * 2 + e.phase) * 1.4;
-          if (!godmode) {
-            const d = p.distanceTo(shipPos);
-            if (d < 19) p.lerp(shipPos, Math.min(1, dt * 9));
-            if (d < shipR + 2.8) { this.ctx.cb.onCrystal(e); remove = true; }
-          }
-          break;
+      if (!godmode) {
+        const dx = e.x - shipPos.x, dy = e.y - shipPos.y, dz = e.z - shipPos.z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        const hitR = e.r + shipR;
+        if (d2 < hitR * hitR) {
+          this.killAst(e);
+          this.ctx.cb.onDestroy(e, 'ship');
+          continue;
         }
-
-        case 'gate': {
-          e.mesh.rotation.z += dt * 0.8;
-          if (!godmode) {
-            const rel = p.z - shipPos.z;
-            if (e.prevRel !== null && !e.passed && e.prevRel < 0 && rel >= 0) {
-              e.passed = true;
-              const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
-              if (dl < 13) this.ctx.cb.onGate(e);
-            }
-            e.prevRel = rel;
-          }
-          break;
+        const rel = e.z - shipPos.z;
+        if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
+          const dl = Math.hypot(dx, dy);
+          if (dl > hitR && dl < hitR + 10) this.ctx.cb.onNearMiss(e, 'ast');
         }
+        e.prevRel = rel;
 
-        case 'planet': {
-          e.body.rotation.y += e.spin * dt;
-          if (e.moon) {
-            e.moonAng += dt * 0.5;
-            e.moon.position.set(Math.cos(e.moonAng) * e.moonR, Math.sin(e.moonAng * 0.9) * 4, Math.sin(e.moonAng) * e.moonR);
-          }
-          if (!godmode) {
-            const d = p.distanceTo(shipPos);
-            const hitR = e.r * 0.96 + shipR;
-            if (d < hitR) {
-              const n = new THREE.Vector3().subVectors(shipPos, p).normalize();
-              shipPos.addScaledVector(n, hitR - d + 0.5);
-              this.ctx.cb.onHitPlanet(n);
-            } else {
-              const rel = p.z - shipPos.z;
-              if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
-                const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
-                if (dl > hitR && dl < hitR + e.r * 0.5 + 12) this.ctx.cb.onNearMiss(e.mesh.position, 'planet');
+        if (bolts) {
+          for (const b of bolts) {
+            if (!b.alive) continue;
+            const bx = e.x - b.pos.x, by = e.y - b.pos.y, bz = e.z - b.pos.z;
+            const rr = e.r + 1.4 + boltStep * 0.5;
+            if (bx * bx + by * by + bz * bz < rr * rr) {
+              b.alive = false;
+              e.hp -= b.dmg;
+              if (e.hp <= 0) {
+                this.killAst(e);
+                this.ctx.cb.onDestroy(e, 'bolt');
+              } else {
+                this.ctx.cb.onBoltHit(e);
               }
-              e.prevRel = rel;
+              break;
             }
           }
-          break;
-        }
-
-        case 'bh': {
-          e.diskMat.uniforms.uTime.value = this.elapsed;
-          e.mesh.rotation.y += dt * 0.05;
-          if (!godmode) {
-            const dx = shipPos.x - p.x;
-            const dy = shipPos.y - p.y;
-            const dz = shipPos.z - p.z;
-            const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (d < e.horizon + shipR * 0.4) {
-              this.ctx.cb.onBHDeath(p);
-              return;
-            }
-            if (d < e.influence) {
-              const pull = Math.min(240, 800000 / (d * d + 400));
-              this.ctx.ship.vel.x -= (dx / d) * pull * dt;
-              this.ctx.ship.vel.y -= (dy / d) * pull * dt;
-              if (d < e.influence * 0.7) e.pulling = true;
-              if (nearestBH === null || d < nearestBH.d) nearestBH = { d, horizon: e.horizon, influence: e.influence };
-            } else if (e.pulling && d >= e.influence) {
-              e.pulling = false;
-              this.ctx.cb.onEscape();
-            }
-            const rel = p.z - shipPos.z;
-            if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
-              const dl = Math.hypot(dx, dy);
-              const hr = e.horizon + shipR;
-              if (dl > hr && dl < hr + 16) this.ctx.cb.onNearMiss(p, 'bh');
-            }
-            e.prevRel = rel;
-          }
-          break;
         }
       }
 
-      if (p.z > DESPAWN_Z) remove = true;
-      if (remove) {
-        this.release(e);
-        const last = this.entities.pop();
-        if (last !== e && i < this.entities.length) this.entities[i] = last;
-        continue;
-      }
-
-      if (!godmode && Math.abs(p.z - shipPos.z) < 900 && p.z < 40) {
-        if (Math.abs(p.x) < 420) {
-          this.radarData.push({ x: p.x, z: p.z, type: e.type, r: e.r });
-        }
+      if (e.z > DESPAWN_Z || Math.abs(e.x) > 420 || Math.abs(e.y) > 300) e.alive = false;
+      if (e.alive && Math.abs(e.z - shipPos.z) < 900 && e.z < 40 && Math.abs(e.x) < 420) {
+        this.radarData.push({ x: e.x, y: e.y, z: e.z, type: 'ast', r: e.r });
       }
     }
 
+    for (let i = this.crys.length - 1; i >= 0; i--) {
+      const e = this.crys[i];
+      if (!e.alive) { this.crys.splice(i, 1); continue; }
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+      e.z += sp * dt;
+      let picked = false;
+      if (!godmode) {
+        const dx = e.x - shipPos.x, dy = e.y - shipPos.y, dz = e.z - shipPos.z;
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < 19) {
+          const k = Math.min(1, dt * 9);
+          e.x -= dx * k; e.y -= dy * k; e.z -= dz * k;
+        }
+        if (d < shipR + 2.8) { this.ctx.cb.onCrystal(e); e.alive = false; picked = true; }
+      }
+      if (picked || e.z > DESPAWN_Z || Math.abs(e.x) > 420) e.alive = false;
+      if (e.alive && Math.abs(e.z - shipPos.z) < 900 && e.z < 40 && Math.abs(e.x) < 420) {
+        this.radarData.push({ x: e.x, y: e.y, z: e.z, type: 'cry', r: 2 });
+      }
+    }
+
+    for (let i = this.pups.length - 1; i >= 0; i--) {
+      const e = this.pups[i];
+      if (!e.alive) { this.pups.splice(i, 1); continue; }
+      e.mesh.position.z += sp * dt;
+      e.core.rotation.y += e.spin * dt;
+      e.core.rotation.x += e.spin * dt * 0.6;
+      let taken = false;
+      if (!godmode) {
+        const d = e.mesh.position.distanceTo(shipPos);
+        if (d < shipR + 3.4) {
+          this.ctx.cb.onPowerup(e.ptype, e.mesh.position);
+          taken = true;
+        }
+        const rel = e.mesh.position.z - shipPos.z;
+        e.prevRel = rel;
+      }
+      if (taken || e.mesh.position.z > DESPAWN_Z) { this.release(e); this.pups.splice(i, 1); continue; }
+      this.radarData.push({ x: e.mesh.position.x, y: e.mesh.position.y, z: e.mesh.position.z, type: 'pup', r: 2 });
+    }
+
+    for (let i = this.comets.length - 1; i >= 0; i--) {
+      const e = this.comets[i];
+      if (!e.alive) { this.comets.splice(i, 1); continue; }
+      e.mesh.position.addScaledVector(e.vel, dt);
+      e.mesh.position.z += sp * dt;
+      e.mesh.rotation.x += dt * 2;
+      e.mesh.rotation.y += dt * 3;
+      const p = e.mesh.position;
+      const h = e.tHead;
+      e.ring[h * 3] = p.x; e.ring[h * 3 + 1] = p.y; e.ring[h * 3 + 2] = p.z;
+      e.tHead = (h + 1) % this.tailLen;
+      if (e.tCount < this.tailLen) e.tCount++;
+      const arr = e.tail.geometry.attributes.position.array;
+      let idx = e.tHead;
+      for (let k = 0; k < this.tailLen; k++) {
+        const j = (idx + this.tailLen) % this.tailLen;
+        arr[k * 3] = e.ring[j * 3];
+        arr[k * 3 + 1] = e.ring[j * 3 + 1];
+        arr[k * 3 + 2] = e.ring[j * 3 + 2];
+        idx++;
+      }
+      e.tail.geometry.attributes.position.needsUpdate = true;
+      e.tail.visible = true;
+
+      if (!godmode) {
+        const d = p.distanceTo(shipPos);
+        if (d < e.r + shipR) {
+          this.killComet(e);
+          this.ctx.cb.onHitComet(e);
+          continue;
+        }
+        const rel = p.z - shipPos.z;
+        if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
+          const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
+          if (dl > e.r + shipR && dl < e.r + shipR + 14) this.ctx.cb.onNearMiss(e, 'comet');
+        }
+        e.prevRel = rel;
+        if (bolts) {
+          for (const b of bolts) {
+            if (!b.alive) continue;
+            const bx = p.x - b.pos.x, by = p.y - b.pos.y, bz = p.z - b.pos.z;
+            const rr = e.r + 1.4 + boltStep * 0.5;
+            if (bx * bx + by * by + bz * bz < rr * rr) {
+              b.alive = false;
+              e.hp -= b.dmg;
+              if (e.hp <= 0) {
+                this.killComet(e);
+                this.ctx.cb.onCometKilled(e);
+              } else {
+                this.ctx.cb.onBoltHit(e);
+              }
+              break;
+            }
+          }
+        }
+      }
+      if (p.z > DESPAWN_Z + 30 || Math.abs(p.x) > 460 || Math.abs(p.y) > 320) { this.killComet(e); continue; }
+      this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'comet', r: e.r });
+    }
+
+    for (let i = this.gates.length - 1; i >= 0; i--) {
+      const e = this.gates[i];
+      if (!e.alive) { this.gates.splice(i, 1); continue; }
+      e.mesh.position.z += sp * dt;
+      e.mesh.rotation.z += dt * 0.8;
+      if (!godmode) {
+        const rel = e.mesh.position.z - shipPos.z;
+        if (e.prevRel !== null && !e.passed && e.prevRel < 0 && rel >= 0) {
+          e.passed = true;
+          const dl = Math.hypot(e.mesh.position.x - shipPos.x, e.mesh.position.y - shipPos.y);
+          if (dl < 13) this.ctx.cb.onGate(e);
+        }
+        e.prevRel = rel;
+        this.radarData.push({ x: e.mesh.position.x, y: e.mesh.position.y, z: e.mesh.position.z, type: 'gate', r: 16 });
+      }
+      if (e.mesh.position.z > DESPAWN_Z) { this.release(e); this.gates.splice(i, 1); }
+    }
+
+    for (let i = this.planets.length - 1; i >= 0; i--) {
+      const e = this.planets[i];
+      if (!e.alive) { this.planets.splice(i, 1); continue; }
+      const p = e.mesh.position;
+      p.z += sp * dt;
+      e.body.rotation.y += e.spin * dt;
+      if (e.moon) {
+        e.moonAng += dt * 0.5;
+        e.moon.position.set(Math.cos(e.moonAng) * e.moonR, Math.sin(e.moonAng * 0.9) * 4, Math.sin(e.moonAng) * e.moonR);
+      }
+      if (!godmode) {
+        const d = p.distanceTo(shipPos);
+        const hitR = e.r * 0.96 + shipR;
+        if (d < hitR) {
+          const n = new THREE.Vector3().subVectors(shipPos, p).normalize();
+          shipPos.addScaledVector(n, hitR - d + 0.5);
+          this.ctx.cb.onHitPlanet(n);
+        } else {
+          const rel = p.z - shipPos.z;
+          if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
+            const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
+            if (dl > hitR && dl < hitR + e.r * 0.5 + 12) this.ctx.cb.onNearMiss(p, 'planet');
+          }
+          e.prevRel = rel;
+          this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'planet', r: e.r });
+        }
+      }
+      if (p.z > DESPAWN_Z + e.r * 2) { this.release(e); this.planets.splice(i, 1); }
+    }
+
+    for (let i = this.bhs.length - 1; i >= 0; i--) {
+      const e = this.bhs[i];
+      if (!e.alive) { this.bhs.splice(i, 1); continue; }
+      const p = e.mesh.position;
+      p.z += sp * dt;
+      e.diskMat.uniforms.uTime.value = this.elapsed;
+      e.orbitMat.uniforms.uTime.value = this.elapsed;
+      e.mesh.rotation.y += dt * 0.05;
+      if (!godmode) {
+        const dx = shipPos.x - p.x;
+        const dy = shipPos.y - p.y;
+        const dz = shipPos.z - p.z;
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < e.horizon + shipR * 0.4) {
+          this.release(e);
+          this.bhs.splice(i, 1);
+          this.ctx.cb.onBHDeath(p);
+          return;
+        }
+        if (d < e.influence) {
+          const pull = Math.min(240, 800000 / (d * d + 400));
+          this.ctx.ship.vel.x -= (dx / d) * pull * dt;
+          this.ctx.ship.vel.y -= (dy / d) * pull * dt;
+          if (d < e.influence * 0.7) e.pulling = true;
+          if (nearestBH === null || d < nearestBH.d) nearestBH = { d, horizon: e.horizon, influence: e.influence };
+        } else if (e.pulling && d >= e.influence) {
+          e.pulling = false;
+          this.ctx.cb.onEscape();
+        }
+        const rel = p.z - shipPos.z;
+        if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
+          const dl = Math.hypot(dx, dy);
+          const hr = e.horizon + shipR;
+          if (dl > hr && dl < hr + 16) this.ctx.cb.onNearMiss(p, 'bh');
+        }
+        e.prevRel = rel;
+        this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'bh', r: e.horizon });
+      }
+      if (p.z > DESPAWN_Z + e.horizon * 4) { this.release(e); this.bhs.splice(i, 1); }
+    }
+
     st.bhDanger = nearestBH;
+    this.writeInstances();
+  }
+
+  writeInstances() {
+    let n = 0;
+    for (const e of this.asts) {
+      if (!e.alive || n >= MAX_AST) continue;
+      this._e.set(e.rx, e.ry, e.rz);
+      this._q.setFromEuler(this._e);
+      this._v.set(e.x, e.y, e.z);
+      this._s.setScalar(e.s);
+      this._m.compose(this._v, this._q, this._s);
+      this.astMesh.setMatrixAt(n++, this._m);
+    }
+    this.astMesh.count = n;
+    this.astMesh.instanceMatrix.needsUpdate = true;
+
+    let m = 0;
+    const pulse = 1 + 0.1 * Math.sin(this.elapsed * 3);
+    for (const e of this.crys) {
+      if (!e.alive || m >= MAX_CRY) continue;
+      const ry = e.y + Math.sin(this.elapsed * 2 + e.phase) * 1.4;
+      this._e.set(0, this.elapsed * 2.4 + e.phase, 0);
+      this._q.setFromEuler(this._e);
+      this._v.set(e.x, ry, e.z);
+      this._s.setScalar(pulse);
+      this._m.compose(this._v, this._q, this._s);
+      this.cryMesh.setMatrixAt(m++, this._m);
+    }
+    this.cryMesh.count = m;
+    this.cryMesh.instanceMatrix.needsUpdate = true;
   }
 }
+
+

@@ -7,11 +7,12 @@ export class UI {
     this.ctx = ctx;
     this.el = {};
     const ids = [
-      'splash', 'hud', 'score', 'mult', 'combo', 'dist', 'speed', 'hull-bar', 'hull-num',
-      'energy-bar', 'radar', 'reticle', 'alerts', 'popups', 'vignette', 'dmg-flash',
-      'menu-main', 'menu-over', 'menu-hangar', 'menu-ach', 'menu-help', 'menu-settings',
-      'pause-overlay', 'countdown', 'toast', 'btn-pause', 'btn-mute', 'btn-full',
-      'touch-controls', 'btn-boost', 'btn-roll', 'btn-brake'
+      'splash', 'hud', 'score', 'mult', 'combo', 'dist', 'speed', 'sector',
+      'hull-bar', 'hull-num', 'energy-bar', 'heat-wrap', 'heat-bar', 'heat-num',
+      'status-chips', 'gp-chip', 'radar', 'reticle', 'alerts', 'popups', 'vignette',
+      'dmg-flash', 'menu-main', 'menu-over', 'menu-hangar', 'menu-ach', 'menu-profile',
+      'menu-help', 'menu-settings', 'pause-overlay', 'countdown', 'toast', 'banner',
+      'btn-pause', 'btn-mute', 'btn-full', 'touch-controls', 'btn-boost', 'btn-roll', 'btn-brake'
     ];
     for (const id of ids) this.el[id] = $(id);
 
@@ -19,23 +20,23 @@ export class UI {
     this.overEls = {
       cause: $('over-cause'), score: $('over-score'), best: $('over-best'),
       stats: $('over-stats'), xpFill: $('xp-fill'), xpText: $('xp-text'),
-      lvlBadge: $('over-lvl'), unlocks: $('over-unlocks'), newRec: $('over-record')
+      lvlBadge: $('over-lvl'), unlocks: $('over-unlocks'), newRec: $('over-record'),
+      objectives: $('over-objectives')
     };
     this.menuEls = {
       best: $('menu-best'), lvl: $('menu-level'), lvlFill: $('menu-xp-fill'), lvlText: $('menu-xp-text')
     };
-    this.lastHudT = 0;
+    this.lastTextT = 0;
     this.dangerOn = false;
+    this.lockOn = false;
+    this.lastChipStr = '';
   }
 
   hideSplash() { this.el.splash.style.display = 'none'; }
 
   layer(id) {
-    const all = ['hud', 'menu-main', 'menu-over', 'menu-hangar', 'menu-ach', 'menu-help', 'menu-settings', 'pause-overlay'];
-    for (const k of all) {
-      if (k === 'hud') continue;
-      this.el[k].classList.add('hidden');
-    }
+    const all = ['menu-main', 'menu-over', 'menu-hangar', 'menu-ach', 'menu-profile', 'menu-help', 'menu-settings', 'pause-overlay'];
+    for (const k of all) this.el[k].classList.add('hidden');
     this.el.hud.classList.add('hidden');
     if (id && id !== 'none') this.el[id].classList.remove('hidden');
   }
@@ -66,6 +67,26 @@ export class UI {
     document.body.classList.toggle('danger', on);
   }
 
+  setLock(on) {
+    if (this.lockOn === on) return;
+    this.lockOn = on;
+    this.el.reticle.classList.toggle('lock', on);
+  }
+
+  setGamepad(on) {
+    this.el['gp-chip'].classList.toggle('hidden', !on);
+  }
+
+  banner(text) {
+    const b = this.el.banner;
+    b.textContent = text;
+    b.classList.remove('show');
+    void b.offsetWidth;
+    b.classList.add('show');
+    clearTimeout(this._bt);
+    this._bt = setTimeout(() => b.classList.remove('show'), 2400);
+  }
+
   popup(text, cls, worldPos) {
     const v = worldPos.clone().project(this.ctx.camera);
     if (v.z > 1) return;
@@ -87,7 +108,16 @@ export class UI {
     f.classList.add('hit');
   }
 
-  updateHUD(state) {
+  updateHUD(state, now) {
+    const h = this.el['hull-bar'];
+    h.style.transform = 'scaleX(' + Math.max(0, state.hull / state.maxHull) + ')';
+    this.el['energy-bar'].style.transform = 'scaleX(' + (state.energy / 100) + ')';
+    this.el['heat-bar'].style.transform = 'scaleX(' + Math.min(1, state.heat) + ')';
+    this.el['heat-wrap'].classList.toggle('hot', state.overheat > 0);
+
+    if (now - this.lastTextT < 100) return;
+    this.lastTextT = now;
+
     this.el.score.textContent = Math.floor(state.score).toLocaleString();
     this.el.mult.textContent = 'x' + state.mult.toFixed(1);
     const comboEl = this.el.combo;
@@ -99,11 +129,20 @@ export class UI {
     }
     this.el.dist.textContent = (state.dist / 1000).toFixed(2) + ' KM';
     this.el.speed.textContent = Math.round(state.speed * 3.6) + ' M/S';
-    this.el['hull-bar'].style.width = Math.max(0, (state.hull / state.maxHull) * 100) + '%';
+    this.el.sector.textContent = state.sectorName;
     this.el['hull-bar'].classList.toggle('low', state.hull < 30);
     this.el['hull-num'].textContent = Math.max(0, Math.ceil(state.hull)) + '%';
-    this.el['energy-bar'].style.width = state.energy + '%';
+    this.el['heat-num'].textContent = state.overheat > 0 ? 'COOLING' : Math.round(state.heat * 100) + '%';
     document.body.classList.toggle('critical', state.hull < 30);
+
+    let chips = '';
+    if (state.shield > 0) chips += '<span class="chip-s shield">SHIELD x' + state.shield + '</span>';
+    if (state.mult2T > 0) chips += '<span class="chip-s multi">x2 ' + Math.ceil(state.mult2T) + 's</span>';
+    if (state.overdriveT > 0) chips += '<span class="chip-s surge">SURGE ' + Math.ceil(state.overdriveT) + 's</span>';
+    if (chips !== this.lastChipStr) {
+      this.lastChipStr = chips;
+      this.el['status-chips'].innerHTML = chips;
+    }
   }
 
   drawRadar(data) {
@@ -135,6 +174,8 @@ export class UI {
       else if (d.type === 'gate') { col = '#57ff9a'; sz = 2.6; }
       else if (d.type === 'bh') { col = '#c07aff'; sz = 4.2; }
       else if (d.type === 'planet') { col = '#ffb45a'; sz = 3.6; }
+      else if (d.type === 'pup') { col = '#ffd76b'; sz = 2.6; }
+      else if (d.type === 'comet') { col = '#aef1ff'; sz = 3; }
       g.fillStyle = col;
       g.beginPath(); g.arc(px, py, sz, 0, Math.PI * 2); g.fill();
     }
@@ -190,6 +231,45 @@ export class UI {
     }
   }
 
+  renderProfile(save) {
+    const s = save.stats;
+    const hours = (s.playtime / 3600).toFixed(1);
+    $('profile-stats').innerHTML = `
+      <div><span>RUNS FLOWN</span><b>${s.runs}</b></div>
+      <div><span>TOTAL DISTANCE</span><b>${(s.dist / 1000).toFixed(1)} KM</b></div>
+      <div><span>FLIGHT TIME</span><b>${hours} H</b></div>
+      <div><span>CRYSTALS</span><b>${s.crystals}</b></div>
+      <div><span>GATES</span><b>${s.gates}</b></div>
+      <div><span>ASTEROIDS DESTROYED</span><b>${s.kills}</b></div>
+      <div><span>NEAR MISSES</span><b>${s.nearMisses}</b></div>
+      <div><span>WELLS ESCAPED</span><b>${s.escapes}</b></div>
+      <div><span>POWER-UPS</span><b>${s.powerups}</b></div>
+      <div><span>BEST SCORE</span><b>${Math.floor(save.best).toLocaleString()}</b></div>`;
+    const runs = $('profile-runs');
+    runs.innerHTML = '';
+    if (!save.runs.length) {
+      runs.innerHTML = '<div class="run-row empty">NO RUNS RECORDED YET — LAUNCH A MISSION</div>';
+      return;
+    }
+    save.runs.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'run-row' + (i === 0 ? ' top' : '');
+      row.innerHTML = `<span class="rk">#${i + 1}</span><span class="rs">${Math.floor(r.score).toLocaleString()}</span><span class="rd">${(r.dist / 1000).toFixed(2)} KM</span><span class="rt">${r.date}</span>`;
+      runs.appendChild(row);
+    });
+  }
+
+  renderObjectives(container, objectives) {
+    if (!container) return;
+    container.innerHTML = '<div class="obj-title">RUN OBJECTIVES</div>';
+    for (const o of objectives) {
+      const row = document.createElement('div');
+      row.className = 'obj-row' + (o.done ? ' done' : '');
+      row.innerHTML = `<span class="obj-check">${o.done ? '&#10003;' : '&#9678;'}</span> ${o.label}`;
+      container.appendChild(row);
+    }
+  }
+
   showOver(data) {
     this.overEls.cause.textContent = data.cause;
     this.overEls.best.textContent = 'BEST ' + Math.floor(data.best).toLocaleString();
@@ -198,9 +278,10 @@ export class UI {
       <div><span>DISTANCE</span><b>${(data.dist / 1000).toFixed(2)} KM</b></div>
       <div><span>CRYSTALS</span><b>${data.crystals}</b></div>
       <div><span>GATES</span><b>${data.gates}</b></div>
+      <div><span>KILLS</span><b>${data.kills}</b></div>
       <div><span>NEAR MISSES</span><b>${data.nearMisses}</b></div>
-      <div><span>MAX COMBO</span><b>x${data.maxCombo}</b></div>
-      <div><span>ESCAPES</span><b>${data.escapes || 0}</b></div>`;
+      <div><span>MAX COMBO</span><b>x${data.maxCombo}</b></div>`;
+    this.renderObjectives(this.overEls.objectives, data.objectives);
     this.overEls.lvlBadge.textContent = 'LV ' + levelInfo(data.save.xp).level;
 
     const startXp = data.prevXp, endXp = data.save.xp;
@@ -224,7 +305,7 @@ export class UI {
     };
     stepS();
 
-    const unl = $('over-unlocks');
+    const unl = this.overEls.unlocks;
     unl.innerHTML = '';
     if (data.unlocks.length) {
       unl.innerHTML = '<div class="unlock-title">NEW UNLOCKS</div>' +

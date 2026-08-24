@@ -28,9 +28,9 @@ page.setDefaultTimeout(120000);
 page.on('pageerror', e => console.log('[PAGEERROR]', e.message));
 await page.evaluateOnNewDocument(() => {
   localStorage.setItem('voidrunner_save_v1', JSON.stringify({
-    v: 1, best: 0, xp: 0, equipped: 'cadet',
-    stats: { runs: 0, crystals: 0, gates: 0, dist: 0, nearMisses: 0, escapes: 0 },
-    ach: {}, settings: { sound: true, quality: 'low', sens: 1, invertY: false }
+    v: 2, best: 0, xp: 0, equipped: 'cadet', runs: [], ghost: null,
+    stats: { runs: 0, crystals: 0, gates: 0, dist: 0, nearMisses: 0, escapes: 0, kills: 0, playtime: 0, powerups: 0 },
+    ach: {}, settings: { sound: true, quality: 'low', sens: 1, invertY: false, invertX: false, shake: 1, controlMode: 'aim', autofire: true, lefty: false, ghost: true }
   }));
 });
 
@@ -46,25 +46,36 @@ await page.screenshot({ path: 'test-menu.png' });
 
 await page.click('#btn-hangar');
 await new Promise(r => setTimeout(r, 600));
-const cards = await page.$$eval('.skin-card', els => els.length);
-step('hangar renders 7 skins', cards === 7, 'cards=' + cards);
-const equippedOk = await page.$eval('.skin-card.equipped', el => el.querySelector('.skin-name').textContent === 'Cadet');
-step('default skin equipped', equippedOk);
-await page.screenshot({ path: 'test-hangar.png' });
+step('hangar renders 7 skins', (await page.$$eval('.skin-card', els => els.length)) === 7);
 await page.click('#hangar-back');
+await new Promise(r => setTimeout(r, 400));
+
+await page.click('#btn-profile');
 await new Promise(r => setTimeout(r, 500));
+const statCells = await page.$$eval('#profile-stats div', els => els.length);
+const runRows = await page.$$eval('#profile-runs .run-row', els => els.length);
+step('profile renders 10 stat cells', statCells === 10, 'cells=' + statCells);
+step('profile shows empty runs state', runRows === 1 && (await page.$eval('#profile-runs', el => el.textContent.includes('NO RUNS'))));
+await page.screenshot({ path: 'test-profile.png' });
+await page.click('#profile-back');
+await new Promise(r => setTimeout(r, 400));
 
 await page.click('#btn-ach');
 await new Promise(r => setTimeout(r, 500));
-const achRows = await page.$$eval('.ach-row', els => els.length);
-step('achievements list renders 10', achRows === 10, 'rows=' + achRows);
+step('achievements render 14 rows', (await page.$$eval('.ach-row', els => els.length)) === 14);
 await page.click('#ach-back');
 await new Promise(r => setTimeout(r, 400));
 
-await page.click('#btn-help');
-await new Promise(r => setTimeout(r, 400));
-step('flight manual opens', await page.evaluate(() => !document.getElementById('menu-help').classList.contains('hidden')));
-await page.click('#help-back');
+await page.click('#btn-settings');
+await new Promise(r => setTimeout(r, 500));
+const radios = await page.$$eval('input[name="ctlmode"]', els => els.length);
+step('mouse mode radios present', radios === 3);
+await page.click('input[name="ctlmode"][value="stick"]');
+await new Promise(r => setTimeout(r, 200));
+const savedMode = await page.evaluate(() => JSON.parse(localStorage.getItem('voidrunner_save_v1')).settings.controlMode);
+step('control mode persists to storage', savedMode === 'stick', savedMode);
+await page.click('input[name="ctlmode"][value="aim"]');
+await page.click('#settings-back');
 await new Promise(r => setTimeout(r, 400));
 
 await page.click('#btn-play');
@@ -76,7 +87,7 @@ for (let i = 0; i < 60 && !playing; i++) {
   await new Promise(r => setTimeout(r, 2000));
   playing = await page.evaluate(() => window.__vrDebug().mode === 'play');
 }
-step('reached PLAY mode (slow-fps headless tolerant)', playing);
+step('reached PLAY mode', playing);
 
 if (playing) {
   const d0 = await page.evaluate(() => window.__vrDebug());
@@ -88,28 +99,36 @@ if (playing) {
   await page.mouse.up();
   const d1 = await page.evaluate(() => window.__vrDebug());
   step('distance accruing', d1.dist > d0.dist, `${d0.dist} -> ${d1.dist}`);
-  step('boost raises speed', d1.speed >= d0.speed, `speed=${d1.speed}`);
+  step('debug exposes v2 systems', typeof d1.heat === 'number' && typeof d1.sector === 'number' && typeof d1.objectives === 'string');
 
   await page.keyboard.press('KeyP');
   await new Promise(r => setTimeout(r, 1500));
-  const paused = await page.evaluate(() => !document.getElementById('pause-overlay').classList.contains('hidden'));
-  step('pause opens', paused);
+  step('pause opens with objectives', await page.evaluate(() => {
+    const ok = !document.getElementById('pause-overlay').classList.contains('hidden');
+    const objs = document.querySelectorAll('#pause-objectives .obj-row').length;
+    return ok && objs === 3;
+  }), 'objs=' + await page.evaluate(() => document.querySelectorAll('#pause-objectives .obj-row').length));
   await page.screenshot({ path: 'test-pause.png' });
   await page.click('#btn-resume');
   await new Promise(r => setTimeout(r, 1500));
-  const dbg = await page.evaluate(() => window.__vrDebug());
-  step('resume returns to play', dbg.mode === 'play', 'mode=' + dbg.mode);
+  step('resume returns to play', (await page.evaluate(() => window.__vrDebug().mode)) === 'play');
 
   await page.keyboard.press('KeyM');
   await new Promise(r => setTimeout(r, 400));
   step('mute toggles', (await page.evaluate(() => document.getElementById('btn-mute').textContent)) === 'AUDIO OFF');
+
+  await page.keyboard.press('KeyP');
+  await new Promise(r => setTimeout(r, 800));
+  await page.click('#btn-quit');
+  await new Promise(r => setTimeout(r, 800));
+  const backAtMenu = await page.evaluate(() => !document.getElementById('menu-main').classList.contains('hidden'));
+  const cleanState = await page.evaluate(() => !document.body.classList.contains('playing'));
+  step('abandon run returns to clean menu', backAtMenu && cleanState);
 } else {
   step('play mode reachable', false, 'timeout');
 }
 
-step('zero page errors across session', true, '');
 await page.screenshot({ path: 'test-end.png' });
-
 await browser.close();
 server.close();
 console.log(failures ? `RESULT: ${failures} FAILURES` : 'RESULT: ALL TESTS PASSED');

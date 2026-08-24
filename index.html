@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="description" content="VOIDRUNNER — a deep-space infinite flight simulator. Dodge black holes, weave through asteroid fields, collect void crystals.">
+<meta name="description" content="VOIDRUNNER — a deep-space infinite flight simulator. Dodge black holes, destroy asteroids, race your ghost.">
 <title>VOIDRUNNER — Deep Space Flight</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23050914'/%3E%3Ccircle cx='32' cy='32' r='14' fill='%23000'/%3E%3Ccircle cx='32' cy='32' r='19' fill='none' stroke='%23ffb45a' stroke-width='4'/%3E%3Ccircle cx='50' cy='16' r='3' fill='%2339d7ff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -33,8 +33,10 @@
       <div id="score">0</div>
       <div id="mult" class="chip">x1.0</div>
       <div id="combo"></div>
+      <div id="sector"></div>
     </div>
     <div class="hud-tr">
+      <div id="gp-chip" class="chip gp hidden">GAMEPAD</div>
       <div class="stat"><span class="lbl">DIST</span><span id="dist">0.00 KM</span></div>
       <div class="stat"><span class="lbl">VEL</span><span id="speed">0 M/S</span></div>
       <button id="btn-pause" class="hbtn pause-ico" aria-label="Pause"><span></span><span></span></button>
@@ -46,9 +48,13 @@
         <div class="bar hull"><div id="hull-bar"></div></div><span id="hull-num" class="num">100%</span></div>
       <div class="bar-row"><span class="lbl">PWR</span>
         <div class="bar energy"><div id="energy-bar"></div></div></div>
+      <div class="bar-row" id="heat-wrap"><span class="lbl">HEAT</span>
+        <div class="bar heat"><div id="heat-bar"></div></div><span id="heat-num" class="num">0%</span></div>
     </div>
+    <div id="status-chips"></div>
     <canvas id="radar" width="160" height="160"></canvas>
     <div id="alerts"></div>
+    <div id="banner"></div>
     <div id="popups"></div>
     <div id="reticle"></div>
     <div id="vignette"></div>
@@ -69,6 +75,7 @@
     <nav class="menu-col">
       <button id="btn-play" class="cta">LAUNCH MISSION</button>
       <button id="btn-hangar" class="mbtn">HANGAR</button>
+      <button id="btn-profile" class="mbtn">PILOT PROFILE</button>
       <button id="btn-ach" class="mbtn">ACHIEVEMENTS</button>
       <button id="btn-help" class="mbtn">HOW TO PLAY</button>
       <button id="btn-settings" class="mbtn">SETTINGS</button>
@@ -81,7 +88,7 @@
         <div class="xp-mini"><div id="menu-xp-fill"></div></div>
         <div id="menu-xp-text" class="xp-text">0 / 140 XP</div>
       </div>
-      <div class="credit">BUILT BY ANIRUDDHA ADAK · THREE.JS · WEBGL</div>
+      <div class="credit">BUILT BY ANIRUDDHA ADAK · THREE.JS · WEBGL · V2.0</div>
     </footer>
   </div>
 
@@ -92,6 +99,7 @@
       <div class="over-score-lbl">FINAL SCORE</div>
       <div id="over-score" class="over-score">0</div>
       <div id="over-best" class="over-best">BEST 0</div>
+      <div id="over-objectives" class="obj-block"></div>
       <div id="over-stats" class="over-stats"></div>
       <div class="xp-block">
         <div id="over-lvl" class="lvl-chip">LV 1</div>
@@ -110,6 +118,7 @@
   <div id="pause-overlay" class="layer menu hidden">
     <div class="panel">
       <h2>PAUSED</h2>
+      <div id="pause-objectives" class="obj-block"></div>
       <div class="menu-col">
         <button id="btn-resume" class="cta">RESUME</button>
         <button id="btn-restart" class="mbtn">RESTART RUN</button>
@@ -129,6 +138,16 @@
     </div>
   </div>
 
+  <div id="menu-profile" class="layer menu hidden">
+    <div class="panel wide-panel">
+      <h2>PILOT PROFILE</h2>
+      <div id="profile-stats" class="profile-grid"></div>
+      <div class="obj-title">TOP RUNS</div>
+      <div id="profile-runs" class="runs-list"></div>
+      <div class="back-row"><button id="profile-back" class="mbtn">BACK</button></div>
+    </div>
+  </div>
+
   <div id="menu-ach" class="layer menu hidden">
     <div class="panel wide-panel">
       <h2>ACHIEVEMENTS</h2>
@@ -144,38 +163,53 @@
         <section>
           <h3>DESKTOP — MOUSE ONLY</h3>
           <ul>
-            <li><b>MOVE MOUSE</b> — steer the ship (reticle marks your heading)</li>
-            <li><b>HOLD LEFT CLICK</b> — afterburner boost (drains power)</li>
-            <li><b>HOLD RIGHT CLICK</b> — air brake</li>
-            <li><b>MIDDLE CLICK / SPACE</b> — barrel roll dodge (brief invulnerability)</li>
-            <li><b>P / ESC</b> — pause &nbsp;·&nbsp; <b>M</b> — audio &nbsp;·&nbsp; WASD/arrows also steer</li>
+            <li><b>MOVE MOUSE</b> — steer (reticle marks heading)</li>
+            <li><b>AUTO-CANNON</b> — fires at whatever your reticle covers; watch the heat gauge</li>
+            <li><b>HOLD LEFT CLICK</b> — afterburner · <b>RIGHT CLICK</b> — air brake</li>
+            <li><b>MIDDLE CLICK / SPACE</b> — barrel roll (brief invulnerability)</li>
+            <li><b>P / ESC</b> pause · <b>M</b> audio · WASD/arrows steer</li>
+          </ul>
+        </section>
+        <section>
+          <h3>GAMEPAD</h3>
+          <ul>
+            <li><b>LEFT STICK</b> — steer</li>
+            <li><b>RT / A</b> — boost · <b>LT / B</b> — brake</li>
+            <li><b>X / RB</b> — barrel roll · <b>START</b> — pause</li>
           </ul>
         </section>
         <section>
           <h3>MOBILE / TOUCH</h3>
           <ul>
-            <li><b>DRAG ANYWHERE</b> — steer relative to your touch point</li>
-            <li><b>BOOST</b> button — hold for afterburner</li>
-            <li><b>ROLL</b> button — tap to barrel roll</li>
-            <li><b>BRK</b> button — hold to brake</li>
+            <li><b>DRAG ANYWHERE</b> — relative steering</li>
+            <li><b>BOOST / ROLL / BRK</b> buttons on screen</li>
+            <li>Left-handed layout available in settings</li>
           </ul>
         </section>
         <section>
-          <h3>SCORING</h3>
+          <h3>SCORING & POWER-UPS</h3>
           <ul>
-            <li>Score flows from distance × multiplier</li>
-            <li><b>VOID CRYSTALS</b> +150 · they magnet toward you</li>
-            <li><b>GATES</b> +350 and refill power</li>
-            <li><b>NEAR MISS</b> +75 · every pickup chains the combo up to x5</li>
+            <li><b>CRYSTALS</b> +150 · <b>GATES</b> +350 · <b>NEAR MISS</b> +75 · combo to x5</li>
+            <li><b>SHIELD</b> — absorbs 2 hits · <b>REPAIR</b> — +35 hull</li>
+            <li><b>SURGE</b> — 8s free overdrive · <b>SCORE x2</b> — 12s double points</li>
+            <li>Destroy asteroids for drops — crystals and power-ups</li>
           </ul>
         </section>
         <section>
           <h3>SURVIVAL CONSTRAINTS</h3>
           <ul>
-            <li><b>HULL</b> — asteroids and planets deal impact damage; it slowly self-repairs</li>
-            <li><b>BLACK HOLES</b> — gravity wells drag you in; cross the event horizon and you are consumed</li>
-            <li><b>EDGE FIELD</b> — leaving the navigation corridor burns the hull</li>
-            <li><b>POWER</b> — boosting drains it, coasting recharges it</li>
+            <li><b>HULL</b> — impacts deal damage; self-repairs after 4.5s calm</li>
+            <li><b>BLACK HOLES</b> — inverse-square gravity; the horizon is fatal</li>
+            <li><b>EDGE FIELD</b> — leaving the corridor burns hull</li>
+            <li><b>HEAT</b> — sustained fire overheats the cannons</li>
+          </ul>
+        </section>
+        <section>
+          <h3>SECTORS & GHOSTS</h3>
+          <ul>
+            <li>Every 4 km a new <b>SECTOR</b> — harder, and the nebula changes</li>
+            <li><b>GHOST</b> — race the flight path of your best run</li>
+            <li><b>OBJECTIVES</b> — 3 per run, +400 XP each</li>
           </ul>
         </section>
       </div>
@@ -186,19 +220,39 @@
   <div id="menu-settings" class="layer menu hidden">
     <div class="panel settings-panel">
       <h2>SETTINGS</h2>
+
+      <div class="set-group">DISPLAY & AUDIO</div>
       <label class="set-row"><span>AUDIO</span><input type="checkbox" id="set-sound"></label>
       <label class="set-row"><span>QUALITY</span>
         <select id="set-quality">
-          <option value="auto">AUTO</option>
+          <option value="auto">AUTO (ADAPTIVE)</option>
           <option value="low">LOW</option>
           <option value="medium">MEDIUM</option>
           <option value="high">HIGH</option>
         </select>
       </label>
+      <label class="set-row"><span>CAMERA SHAKE <b id="shake-val">100%</b></span>
+        <input type="range" id="set-shake" min="0" max="1" step="0.1" value="1">
+      </label>
+
+      <div class="set-group">CONTROLS</div>
+      <div class="set-row"><span>MOUSE MODE</span><span class="radio-row">
+        <label><input type="radio" name="ctlmode" value="aim">AIM</label>
+        <label><input type="radio" name="ctlmode" value="stick">STICK</label>
+        <label><input type="radio" name="ctlmode" value="lock">LOCK</label>
+      </span></div>
       <label class="set-row"><span>SENSITIVITY <b id="sens-val">1.0</b></span>
         <input type="range" id="set-sens" min="0.4" max="2" step="0.1" value="1">
       </label>
       <label class="set-row"><span>INVERT Y</span><input type="checkbox" id="set-invert"></label>
+      <label class="set-row"><span>INVERT X</span><input type="checkbox" id="set-invertx"></label>
+      <label class="set-row"><span>AUTO-CANNON</span><input type="checkbox" id="set-autofire"></label>
+      <label class="set-row"><span>LEFT-HANDED TOUCH</span><input type="checkbox" id="set-lefty"></label>
+
+      <div class="set-group">GAME</div>
+      <label class="set-row"><span>BEST-RUN GHOST</span><input type="checkbox" id="set-ghost"></label>
+
+      <div class="set-hint">MOUSE MODES — AIM: cursor position steers. STICK: mouse movement acts like a self-centering stick. LOCK: click to capture the pointer (Esc pauses).</div>
       <div class="back-row"><button id="settings-back" class="mbtn">BACK</button></div>
     </div>
   </div>

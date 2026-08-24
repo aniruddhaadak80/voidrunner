@@ -73,7 +73,8 @@
       <p class="tagline">DEEP-SPACE INFINITE FLIGHT SIMULATOR</p>
     </div>
     <nav class="menu-col">
-      <button id="btn-play" class="cta">LAUNCH MISSION</button>
+      <button id="btn-play" class="cta">START TRAINING</button>
+      <button id="btn-training" class="mbtn small">REPLAY TRAINING</button>
       <button id="btn-hangar" class="mbtn">HANGAR</button>
       <button id="btn-profile" class="mbtn">PILOT PROFILE</button>
       <button id="btn-ach" class="mbtn">ACHIEVEMENTS</button>
@@ -88,7 +89,8 @@
         <div class="xp-mini"><div id="menu-xp-fill"></div></div>
         <div id="menu-xp-text" class="xp-text">0 / 140 XP</div>
       </div>
-      <div class="credit">BUILT BY ANIRUDDHA ADAK · THREE.JS · WEBGL · V2.0</div>
+      <div class="credit">BUILT BY ANIRUDDHA ADAK · THREE.JS · WEBGL · V3.0</div>
+      <div id="device-chip" class="device-chip"></div>
     </footer>
   </div>
 
@@ -259,6 +261,18 @@
 
   <div id="countdown"></div>
   <div id="toast"></div>
+
+  <div id="boost-fx"></div>
+
+  <div id="hint-bar"></div>
+
+  <div id="tut-card" class="hidden">
+    <div id="tut-step-lbl">TRAINING</div>
+    <div id="tut-text"></div>
+    <div id="tut-keys"></div>
+    <div id="tut-dots"></div>
+    <button id="tut-skip">SKIP TRAINING</button>
+  </div>
 </div>
 
 <script>

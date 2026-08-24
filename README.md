@@ -1,8 +1,10 @@
 # VOIDRUNNER
 
-**A deep-space infinite flight simulator.** Pilot a starfighter through an endless, procedurally-generated universe — threading asteroid fields, slingshotting past ringed planets, escaping the gravitational pull of black holes, and blowing rocks apart with auto-targeting plasma cannons.
+**A deep-space infinite flight simulator.** Pilot a starfighter through an endless, procedurally-generated universe — threading asteroid fields, slingshotting past ringed planets, escaping the gravitational pull of black holes, blowing up fuel tanks, and racing the ghost of your own best flight.
 
 Built from scratch with **Three.js**, **WebGL**, custom GLSL shaders, procedural geometry/textures, and a fully synthesized WebAudio soundscape. No downloaded assets. No build step. Runs anywhere a browser runs.
+
+**New pilots get a gamified, step-by-step training mission on first launch** — learn by doing in 60 seconds, with plain-language cards, progress dots, and +500 XP on completion.
 
 <p align="center">
   <b>PLAY LIVE → <a href="https://voidrunner-neon.vercel.app">https://voidrunner-neon.vercel.app</a></b>
@@ -35,6 +37,19 @@ Built from scratch with **Three.js**, **WebGL**, custom GLSL shaders, procedural
 
 ---
 
+## Training Mission (first launch)
+
+First time players jump straight into a **gamified training run** — no manuals needed:
+
+1. **Steer** — grab 5 crystals spawned just for you
+2. **Boost** — hold the boost control for a moment
+3. **Shoot** — aim at practice rocks; your guns do the work
+4. **Roll** — try a barrel roll
+5. **Gate** — fly through a real boost ring
+6. **Done** — +500 XP, and the real universe opens up
+
+Cards use plain language, show the exact keys/buttons for *your* device (mouse, touch, or gamepad), and can be skipped anytime. Replay via **REPLAY TRAINING** in the menu. A hint bar also appears for the first seconds of every normal run, matched to your input device.
+
 ## Gameplay
 
 VOIDRUNNER is an infinite runner in three dimensions. Your ship flies forward automatically; you control lateral movement, throttle, evasive maneuvers — and your auto-cannon does the shooting wherever you point the reticle.
@@ -50,8 +65,14 @@ Every run is different. A weighted spawn director generates patterns across five
 | **Planets** | Procedurally-textured worlds — ringed giants at the corridor's edge, dwarf planets as lethal obstacles inside it |
 | **Black Holes** | Gravity wells with physically-scaled pull (`F ∝ 1/d²`), orbiting debris fields, photon rings — escape for bonus points, cross the horizon and be consumed |
 | **Comets** | Fast diagonal strikers with particle tails — high threat, high reward |
+| **Fuel Tanks** | Explosive canisters — one shot detonates them for big points and loot |
+| **Satellites** | Tumbling solar-panel hazards with blinking beacons |
+| **Proximity Mines** | They arm and blink faster as you approach — shoot them from range |
+| **Ice Fields** | Translucent crystal shards drifting through the corridor |
+| **Alien Artifacts** | Rare glowing monoliths — fly close to scan for +250 |
+| **Space Stations** | Massive ringed stations drift past on every sector change |
 
-Base velocity climbs from 46 to 138 units/s. Spawn density, wall tightness, and black-hole frequency all scale with tier.
+Glowing **corridor buoys** mark the flyable space at all times, so you always know where to fly.
 
 ## Controls
 

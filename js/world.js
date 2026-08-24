@@ -5,6 +5,7 @@ export const SPAWN_Z = -1550;
 export const DESPAWN_Z = 70;
 export const MAX_AST = 150;
 export const MAX_CRY = 110;
+const W = 150, H = 95;
 
 const PLANET_PALETTES = [
   ['#7a5c3a', '#a5793f', '#5d4426'],
@@ -367,6 +368,44 @@ export class World {
     this.cometGeo = displacedRock();
     this.cometMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, emissive: 0x6fc8ff, emissiveIntensity: 1.6, roughness: 0.6, flatShading: true });
     this.tailLen = 18;
+
+    this.buoyMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 1.7, 2.2), toneMapped: false });
+    this.buoyMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.7, 3.4, 0.7), this.buoyMat, 48);
+    this.buoyMesh.frustumCulled = false;
+    this.buoyMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.buoyMesh.count = 48;
+    this.scene.add(this.buoyMesh);
+    this.buoyScroll = 0;
+
+    this.shardMat = new THREE.MeshStandardMaterial({
+      color: 0x9fd8ff, emissive: 0x4a90c8, emissiveIntensity: 0.7,
+      roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.75
+    });
+    this.shardMesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), this.shardMat, 36);
+    this.shardMesh.frustumCulled = false;
+    this.shardMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.shardMesh.count = 0;
+    this.scene.add(this.shardMesh);
+
+    this.tanks = [];
+    this.sats = [];
+    this.mines = [];
+    this.shardEnts = [];
+    this.artifacts = [];
+    this.pools.tank = [];
+    this.pools.sat = [];
+    this.pools.mine = [];
+    this.pools.art = [];
+    this.tutorialKinds = null;
+    this.station = null;
+
+    this.tankMatBody = new THREE.MeshStandardMaterial({ color: 0xc04838, roughness: 0.5, metalness: 0.4 });
+    this.tankMatBand = new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 0.7 });
+    this.satMatBody = new THREE.MeshStandardMaterial({ color: 0x8a92a5, roughness: 0.4, metalness: 0.8 });
+    this.satMatPanel = new THREE.MeshStandardMaterial({ color: 0x1c3a66, emissive: 0x16325c, emissiveIntensity: 0.9, roughness: 0.3 });
+    this.mineMatCore = new THREE.MeshStandardMaterial({ color: 0x303038, roughness: 0.6, metalness: 0.7, flatShading: true });
+    this.mineMatSpike = new THREE.MeshStandardMaterial({ color: 0x585864, roughness: 0.5, metalness: 0.8, flatShading: true });
+    this.artMatMono = new THREE.MeshStandardMaterial({ color: 0x14141f, roughness: 0.25, metalness: 0.85 });
   }
 
   acquire(list, poolKey, maker) {
@@ -422,6 +461,116 @@ export class World {
     tail.frustumCulled = false;
     this.scene.add(tail);
     return { kind: 'comet', mesh, head, tail, ring: new Float32Array(this.tailLen * 3), tHead: 0, tCount: 0, vel: new THREE.Vector3(), hp: 2, r: 3.4, prevRel: null, alive: false };
+  }
+
+  makeTank() {
+    const mesh = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 3.2, 14), this.tankMatBody);
+    mesh.add(body);
+    for (const y of [-0.9, 0.9]) {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(1.38, 0.12, 8, 20), this.tankMatBand);
+      band.rotation.x = Math.PI / 2;
+      band.position.y = y;
+      mesh.add(band);
+    }
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(1.35, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), this.tankMatBand);
+    cap.position.y = 1.6;
+    mesh.add(cap);
+    const glow = glowSprite('rgba(255,120,80,0.4)', 7);
+    mesh.add(glow);
+    return { kind: 'tank', mesh, r: 2.5, vx: 0, vy: 0, rx: 0, ry: 0, rv: 0, hp: 1, prevRel: null, alive: false };
+  }
+
+  makeSat() {
+    const mesh = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.7, 2.3), this.satMatBody);
+    mesh.add(body);
+    for (const s of [-1, 1]) {
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.1, 1.7), this.satMatPanel);
+      panel.position.x = s * 3.2;
+      mesh.add(panel);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.12, 0.12), this.satMatBody);
+      arm.position.x = s * 1.35;
+      mesh.add(arm);
+    }
+    const dish = new THREE.Mesh(new THREE.ConeGeometry(0.9, 0.6, 12, 1, true), this.satMatBody);
+    dish.rotation.x = Math.PI / 2;
+    dish.position.z = -1.5;
+    mesh.add(dish);
+    const blink = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowSprite('rgba(255,80,80,0.9)', 1).material.map,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    blink.scale.setScalar(2.2);
+    blink.position.set(0, 1.2, 0);
+    mesh.add(blink);
+    return { kind: 'sat', mesh, blink, r: 3.6, vx: 0, vy: 0, rx: 0, ry: 0, rv: 0, hp: 2, prevRel: null, alive: false };
+  }
+
+  makeMine() {
+    const mesh = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.25, 0), this.mineMatCore);
+    mesh.add(core);
+    for (let i = 0; i < 8; i++) {
+      const th = (i / 8) * Math.PI * 2;
+      const ph = Math.acos(2 * ((i % 4) / 3) - 1);
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.22, 1.1, 6), this.mineMatSpike);
+      spike.position.set(Math.sin(ph) * Math.cos(th) * 1.5, Math.cos(ph) * 1.5, Math.sin(ph) * Math.sin(th) * 1.5);
+      spike.rotation.set(Math.random() * 0.4 - 0.2 + ph, 0, -th + Math.PI / 2);
+      spike.lookAt(0, 0, 0);
+      spike.rotateX(-Math.PI / 2);
+      mesh.add(spike);
+    }
+    const glow = glowSprite('rgba(255,70,70,0.55)', 6);
+    mesh.add(glow);
+    return { kind: 'mine', mesh, glow, r: 2.2, vx: 0, vy: 0, armed: false, prevRel: null, alive: false };
+  }
+
+  makeArtifact() {
+    const mesh = new THREE.Group();
+    const mono = new THREE.Mesh(new THREE.BoxGeometry(1.5, 7.5, 1.5), this.artMatMono);
+    mesh.add(mono);
+    for (const s of [-1, 1]) {
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(0.1, 7.5, 0.1), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.4, 0.9, 2.6), toneMapped: false }));
+      edge.position.set(s * 0.72, 0, s * 0.72);
+      mesh.add(edge);
+      const edge2 = edge.clone();
+      edge2.position.set(s * 0.72, 0, -s * 0.72);
+      mesh.add(edge2);
+    }
+    const hum = glowSprite('rgba(190,120,255,0.4)', 14);
+    mesh.add(hum);
+    return { kind: 'art', mesh, r: 3.5, scanned: false, alive: false };
+  }
+
+  spawnStation(side) {
+    if (this.station) { this.scene.remove(this.station.group); this.station = null; }
+    const group = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x5a6478, roughness: 0.5, metalness: 0.8 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 2.0, 2.4), toneMapped: false });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(55, 5, 10, 40), mat);
+    group.add(ring);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(10, 14, 26, 12), mat);
+    hub.rotation.x = Math.PI / 2;
+    group.add(hub);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(6, 6, 52), mat);
+      spoke.rotation.z = a;
+      spoke.position.set(Math.cos(a) * 27, Math.sin(a) * 27, 0);
+      spoke.rotation.z = a + Math.PI / 2;
+      group.add(spoke);
+      const light = new THREE.Mesh(new THREE.SphereGeometry(1.6, 8, 6), glowMat);
+      light.position.set(Math.cos(a) * 55, Math.sin(a) * 55, 5);
+      group.add(light);
+      group.userData['l' + i] = light;
+    }
+    const beacon = glowSprite(this.rgba('#57e6ff', 0.6), 40);
+    group.add(beacon);
+    group.position.set(side * 300, (Math.random() - 0.5) * 100, -1500);
+    group.rotation.z = Math.random() * Math.PI;
+    this.scene.add(group);
+    this.station = { kind: 'station', group, alive: true, spin: 0.05 };
   }
 
   spawnAsteroid(x, y, z, s, vx, vy, rv, hp) {
@@ -505,12 +654,15 @@ export class World {
   reset() {
     this.asts.length = 0;
     this.crys.length = 0;
-    for (const list of [this.pups, this.comets, this.gates, this.planets, this.bhs]) {
+    this.shardEnts.length = 0;
+    for (const list of [this.pups, this.comets, this.gates, this.planets, this.bhs, this.tanks, this.sats, this.mines, this.artifacts]) {
       for (const e of list) this.release(e);
       list.length = 0;
     }
+    if (this.station) { this.scene.remove(this.station.group); this.station = null; }
     this.astMesh.count = 0;
     this.cryMesh.count = 0;
+    this.shardMesh.count = 0;
     this.frontier = -420;
     this.spawnedCount = 0;
     this.radarData.length = 0;
@@ -521,21 +673,32 @@ export class World {
   }
 
   pick(tier) {
+    if (this.tutorialKinds) return this.tutorialKinds[(Math.random() * this.tutorialKinds.length) | 0];
     const w = [
-      [0.40, 0.34, 0.12, 0.08, 0.00, 0.04, 0.00],
-      [0.34, 0.26, 0.13, 0.11, 0.05, 0.05, 0.06],
-      [0.30, 0.22, 0.13, 0.12, 0.07, 0.05, 0.11],
-      [0.28, 0.20, 0.13, 0.12, 0.08, 0.05, 0.14],
-      [0.26, 0.18, 0.13, 0.12, 0.09, 0.05, 0.17]
+      [34, 30, 10, 7, 6, 5, 4, 2, 2, 0, 0, 0],
+      [28, 23, 10, 9, 5, 5, 5, 4, 4, 3, 3, 1],
+      [24, 20, 10, 9, 5, 5, 5, 5, 4, 5, 6, 2],
+      [21, 18, 10, 9, 5, 5, 5, 5, 4, 7, 9, 2],
+      [18, 16, 10, 9, 5, 5, 5, 6, 4, 8, 12, 2]
     ][tier];
-    if (this.spawnedCount < 3) return Math.random() < 0.6 ? 'cry' : 'ast';
-    let roll = Math.random();
-    const names = ['ast', 'cry', 'gate', 'planet', 'comet', 'pup', 'bh'];
+    let sum = 0;
+    for (const x of w) sum += x;
+    let roll = Math.random() * sum;
+    const names = ['ast', 'cry', 'gate', 'planet', 'shards', 'tank', 'sat', 'mine', 'pup', 'comet', 'bh', 'art'];
     for (let i = 0; i < names.length; i++) {
       roll -= w[i];
       if (roll <= 0) return names[i];
     }
     return 'ast';
+  }
+
+  spawnGateAt(x, y, z) {
+    const e = this.acquire(this.gates, 'gate', () => this.makeGate());
+    e.r = 16;
+    e.passed = false;
+    e.prevRel = null;
+    e.mesh.position.set(x, y, z);
+    return e;
   }
 
   spawnPattern(z, tier) {
@@ -570,12 +733,68 @@ export class World {
         return n * 13 + 20;
       }
       case 'gate': {
-        const e = this.acquire(this.gates, 'gate', () => this.makeGate());
-        e.r = 16;
-        e.passed = false;
-        e.prevRel = null;
-        e.mesh.position.set((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 95, z);
+        this.spawnGateAt((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 95, z);
         return 10;
+      }
+      case 'shards': {
+        const cx = (Math.random() - 0.5) * 200;
+        const cy = (Math.random() - 0.5) * 130;
+        const n = 8 + ((Math.random() * 7) | 0);
+        for (let i = 0; i < n; i++) {
+          const dead = this.shardEnts.find(s => !s.alive);
+          const e = dead || { alive: false };
+          e.alive = true;
+          e.x = cx + (Math.random() - 0.5) * 90;
+          e.y = cy + (Math.random() - 0.5) * 60;
+          e.z = z - Math.random() * 130;
+          e.s = 1.2 + Math.random() * 2.6;
+          e.rx = Math.random() * 3; e.ry = Math.random() * 3;
+          e.rv = (Math.random() - 0.5) * 0.8;
+          if (!dead) this.shardEnts.push(e);
+        }
+        return 140;
+      }
+      case 'tank': {
+        const e = this.acquire(this.tanks, 'tank', () => this.makeTank());
+        e.mesh.position.set((Math.random() - 0.5) * 240, (Math.random() - 0.5) * 150, z);
+        e.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        e.vx = (Math.random() - 0.5) * 3;
+        e.vy = (Math.random() - 0.5) * 3;
+        e.rv = (Math.random() - 0.5) * 1.2;
+        e.hp = 1;
+        e.prevRel = null;
+        return 30;
+      }
+      case 'sat': {
+        const e = this.acquire(this.sats, 'sat', () => this.makeSat());
+        e.mesh.position.set((Math.random() - 0.5) * 240, (Math.random() - 0.5) * 150, z);
+        e.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        e.vx = (Math.random() - 0.5) * 2;
+        e.vy = (Math.random() - 0.5) * 2;
+        e.rv = (Math.random() - 0.5) * 0.5;
+        e.hp = 2;
+        e.prevRel = null;
+        return 30;
+      }
+      case 'mine': {
+        const n = 2 + ((Math.random() * 3) | 0);
+        const mx = (Math.random() - 0.5) * 200;
+        const my = (Math.random() - 0.5) * 120;
+        for (let i = 0; i < n; i++) {
+          const e = this.acquire(this.mines, 'mine', () => this.makeMine());
+          e.mesh.position.set(mx + (Math.random() - 0.5) * 60, my + (Math.random() - 0.5) * 50, z - i * 26);
+          e.vx = (Math.random() - 0.5) * 2;
+          e.vy = (Math.random() - 0.5) * 2;
+          e.armed = false;
+          e.prevRel = null;
+        }
+        return 26 * n + 20;
+      }
+      case 'art': {
+        const e = this.acquire(this.artifacts, 'art', () => this.makeArtifact());
+        e.mesh.position.set((Math.random() - 0.5) * 200, (Math.random() - 0.5) * 120, z);
+        e.scanned = false;
+        return 40;
       }
       case 'planet': {
         const e = this.acquire(this.planets, 'planet', () => this.makePlanet());
@@ -843,6 +1062,186 @@ export class World {
       this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'comet', r: e.r });
     }
 
+    for (let i = this.tanks.length - 1; i >= 0; i--) {
+      const e = this.tanks[i];
+      if (!e.alive) { this.tanks.splice(i, 1); continue; }
+      const p = e.mesh.position;
+      p.x += e.vx * dt;
+      p.y += e.vy * dt;
+      p.z += sp * dt;
+      e.mesh.rotation.x += e.rv * dt * 0.5;
+      e.mesh.rotation.z += e.rv * dt * 0.3;
+      if (!godmode) {
+        const d = p.distanceTo(shipPos);
+        if (d < e.r + shipR) {
+          this.release(e);
+          this.tanks.splice(i, 1);
+          this.ctx.cb.onTankCrash(e);
+          continue;
+        }
+        if (bolts) {
+          for (const b of bolts) {
+            if (!b.alive) continue;
+            const bx = p.x - b.pos.x, by = p.y - b.pos.y, bz = p.z - b.pos.z;
+            const rr = e.r + 1.4 + boltStep * 0.5;
+            if (bx * bx + by * by + bz * bz < rr * rr) {
+              b.alive = false;
+              this.release(e);
+              this.tanks.splice(i, 1);
+              this.ctx.cb.onTankDestroyed(e);
+              break;
+            }
+          }
+        }
+        const rel = p.z - shipPos.z;
+        if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
+          const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
+          if (dl > e.r + shipR && dl < e.r + shipR + 10) this.ctx.cb.onNearMiss(p, 'tank');
+        }
+        e.prevRel = rel;
+        this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'tank', r: e.r });
+      }
+      if (p.z > DESPAWN_Z) { this.release(e); this.tanks.splice(i, 1); }
+    }
+
+    for (let i = this.sats.length - 1; i >= 0; i--) {
+      const e = this.sats[i];
+      if (!e.alive) { this.sats.splice(i, 1); continue; }
+      const p = e.mesh.position;
+      p.x += e.vx * dt;
+      p.y += e.vy * dt;
+      p.z += sp * dt;
+      e.mesh.rotation.x += e.rv * dt;
+      e.mesh.rotation.y += e.rv * dt * 1.4;
+      e.blink.material.opacity = (this.elapsed % 1) < 0.12 ? 1 : 0.15;
+      if (!godmode) {
+        const d = p.distanceTo(shipPos);
+        if (d < e.r + shipR) {
+          this.release(e);
+          this.sats.splice(i, 1);
+          this.ctx.cb.onSatCrash(e);
+          continue;
+        }
+        if (bolts) {
+          for (const b of bolts) {
+            if (!b.alive) continue;
+            const bx = p.x - b.pos.x, by = p.y - b.pos.y, bz = p.z - b.pos.z;
+            const rr = e.r + 1.4 + boltStep * 0.5;
+            if (bx * bx + by * by + bz * bz < rr * rr) {
+              b.alive = false;
+              e.hp -= b.dmg;
+              if (e.hp <= 0) {
+                this.release(e);
+                this.sats.splice(i, 1);
+                this.ctx.cb.onSatKilled(e);
+              } else {
+                this.ctx.cb.onBoltHit(e);
+              }
+              break;
+            }
+          }
+        }
+        const rel = p.z - shipPos.z;
+        if (e.prevRel !== null && e.prevRel < 0 && rel >= 0) {
+          const dl = Math.hypot(p.x - shipPos.x, p.y - shipPos.y);
+          if (dl > e.r + shipR && dl < e.r + shipR + 12) this.ctx.cb.onNearMiss(p, 'sat');
+        }
+        e.prevRel = rel;
+        this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'sat', r: e.r });
+      }
+      if (p.z > DESPAWN_Z) { this.release(e); this.sats.splice(i, 1); }
+    }
+
+    for (let i = this.mines.length - 1; i >= 0; i--) {
+      const e = this.mines[i];
+      if (!e.alive) { this.mines.splice(i, 1); continue; }
+      const p = e.mesh.position;
+      p.x += e.vx * dt;
+      p.y += e.vy * dt;
+      p.z += sp * dt;
+      e.mesh.rotation.y += dt * 1.2;
+      const d = p.distanceTo(shipPos);
+      if (!godmode) {
+        if (!e.armed && d < 75) e.armed = true;
+        const pulse = e.armed ? 0.5 + 0.5 * Math.sin(this.elapsed * 14) : 0.3 + 0.2 * Math.sin(this.elapsed * 3);
+        e.glow.material.opacity = 0.35 + pulse * 0.5;
+        e.glow.scale.setScalar(5 + pulse * 3.5);
+        if (d < 26) {
+          this.release(e);
+          this.mines.splice(i, 1);
+          this.ctx.cb.onMineDetonate(p.clone());
+          continue;
+        }
+        if (bolts) {
+          for (const b of bolts) {
+            if (!b.alive) continue;
+            const bx = p.x - b.pos.x, by = p.y - b.pos.y, bz = p.z - b.pos.z;
+            const rr = e.r + 1.4 + boltStep * 0.5;
+            if (bx * bx + by * by + bz * bz < rr * rr) {
+              b.alive = false;
+              this.release(e);
+              this.mines.splice(i, 1);
+              this.ctx.cb.onMineShot(p.clone());
+              break;
+            }
+          }
+        }
+        this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'mine', r: e.r });
+      }
+      if (p.z > DESPAWN_Z) { this.release(e); this.mines.splice(i, 1); }
+    }
+
+    for (let i = this.artifacts.length - 1; i >= 0; i--) {
+      const e = this.artifacts[i];
+      if (!e.alive) { this.artifacts.splice(i, 1); continue; }
+      const p = e.mesh.position;
+      p.z += sp * dt;
+      e.mesh.rotation.y += dt * 0.4;
+      if (!godmode) {
+        if (!e.scanned && p.distanceTo(shipPos) < 22) {
+          e.scanned = true;
+          this.ctx.cb.onArtifactScanned(p);
+        }
+        if (e.scanned) this.radarData.push({ x: p.x, y: p.y, z: p.z, type: 'art', r: e.r });
+      }
+      if (p.z > DESPAWN_Z) { this.release(e); this.artifacts.splice(i, 1); }
+    }
+
+    if (this.station) {
+      const p = this.station.group.position;
+      p.z += sp * dt;
+      this.station.group.rotation.z += this.station.spin * dt;
+      for (let i = 0; i < 4; i++) {
+        const l = this.station.group.userData['l' + i];
+        if (l) l.visible = ((this.elapsed + i * 0.25) % 1) < 0.15;
+      }
+      if (p.z > 220) {
+        this.scene.remove(this.station.group);
+        this.station = null;
+      }
+    }
+
+    this.buoyScroll += sp * dt;
+    {
+      const rails = [
+        { x: -W, y: 0 }, { x: W, y: 0 },
+        { x: 0, y: -H }, { x: 0, y: H }
+      ];
+      let bi = 0;
+      for (let r = 0; r < 4; r++) {
+        for (let i = 0; i < 12; i++) {
+          const z = ((i * 150 + this.buoyScroll) % 1650) - 1580;
+          const rail = rails[r];
+          this._v.set(rail.x, rail.y, z);
+          this._s.setScalar(1 + 0.25 * Math.sin(this.elapsed * 3 + i));
+          this._q.identity();
+          this._m.compose(this._v, this._q, this._s);
+          this.buoyMesh.setMatrixAt(bi++, this._m);
+        }
+      }
+      this.buoyMesh.instanceMatrix.needsUpdate = true;
+    }
+
     for (let i = this.gates.length - 1; i >= 0; i--) {
       const e = this.gates[i];
       if (!e.alive) { this.gates.splice(i, 1); continue; }
@@ -964,6 +1363,19 @@ export class World {
     }
     this.cryMesh.count = m;
     this.cryMesh.instanceMatrix.needsUpdate = true;
+
+    let k = 0;
+    for (const e of this.shardEnts) {
+      if (!e.alive || k >= 36) continue;
+      this._e.set(e.rx, e.ry, 0);
+      this._q.setFromEuler(this._e);
+      this._v.set(e.x, e.y, e.z);
+      this._s.setScalar(e.s);
+      this._m.compose(this._v, this._q, this._s);
+      this.shardMesh.setMatrixAt(k++, this._m);
+    }
+    this.shardMesh.count = k;
+    this.shardMesh.instanceMatrix.needsUpdate = true;
   }
 }
 

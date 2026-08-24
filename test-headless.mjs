@@ -23,7 +23,7 @@ const browser = await puppeteer.launch({
   args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--no-sandbox']
 });
 const page = await browser.newPage();
-await page.setViewport({ width: 480, height: 320 });
+await page.setViewport({ width: 480, height: 720 });
 page.setDefaultTimeout(120000);
 page.on('pageerror', e => console.log('[PAGEERROR]', e.message));
 await page.evaluateOnNewDocument(() => {
@@ -42,7 +42,28 @@ await new Promise(r => setTimeout(r, 8000));
 
 step('engine booted', await page.evaluate(() => window.__vr === true));
 step('main menu visible', await page.evaluate(() => !document.getElementById('menu-main').classList.contains('hidden')));
+const playLbl = await page.$eval('#btn-play', el => el.textContent);
+step('first launch offers training', playLbl === 'START TRAINING', playLbl);
+const chipTxt = await page.$eval('#device-chip', el => el.textContent);
+step('device chip populated', chipTxt.length > 5, chipTxt);
 await page.screenshot({ path: 'test-menu.png' });
+
+await page.click('#btn-play');
+await new Promise(r => setTimeout(r, 600));
+const tutShown = await page.evaluate(() => !document.getElementById('tut-card').classList.contains('hidden'));
+const tutState = await page.evaluate(() => window.__vrDebug());
+step('tutorial card appears on first launch', tutShown && tutState.tutOn && tutState.tutStep === 0, 'step=' + tutState.tutStep);
+await page.screenshot({ path: 'test-tutorial.png' });
+await page.click('#tut-skip');
+await new Promise(r => setTimeout(r, 600));
+const tutDone = await page.evaluate(() => JSON.parse(localStorage.getItem('voidrunner_save_v1')).tutorialDone);
+const tutHidden = await page.evaluate(() => document.getElementById('tut-card').classList.contains('hidden'));
+step('skip training persists + hides card', tutDone === true && tutHidden);
+await page.keyboard.press('KeyP');
+await new Promise(r => setTimeout(r, 500));
+await page.click('#btn-quit');
+await new Promise(r => setTimeout(r, 600));
+step('back at menu with LAUNCH label', (await page.$eval('#btn-play', el => el.textContent)) === 'LAUNCH MISSION');
 
 await page.click('#btn-hangar');
 await new Promise(r => setTimeout(r, 600));

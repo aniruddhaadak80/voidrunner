@@ -12,6 +12,8 @@ export class UI {
       'status-chips', 'gp-chip', 'radar', 'reticle', 'alerts', 'popups', 'vignette',
       'dmg-flash', 'menu-main', 'menu-over', 'menu-hangar', 'menu-ach', 'menu-profile',
       'menu-help', 'menu-settings', 'pause-overlay', 'countdown', 'toast', 'banner',
+      'tut-card', 'tut-text', 'tut-keys', 'tut-dots', 'tut-skip', 'hint-bar',
+      'boost-fx', 'device-chip',
       'btn-pause', 'btn-mute', 'btn-full', 'touch-controls', 'btn-boost', 'btn-roll', 'btn-brake'
     ];
     for (const id of ids) this.el[id] = $(id);
@@ -85,6 +87,35 @@ export class UI {
     b.classList.add('show');
     clearTimeout(this._bt);
     this._bt = setTimeout(() => b.classList.remove('show'), 2400);
+  }
+
+  tutorialCard(text, keys, step, total) {
+    const c = this.el['tut-card'];
+    this.el['tut-text'].textContent = text;
+    this.el['tut-keys'].textContent = keys ? 'CONTROLS: ' + keys : '';
+    let dots = '';
+    for (let i = 0; i < total; i++) dots += '<span class="dot' + (i < step ? ' done' : i === step ? ' cur' : '') + '"></span>';
+    this.el['tut-dots'].innerHTML = dots;
+    c.classList.remove('hidden');
+    c.classList.remove('pop');
+    void c.offsetWidth;
+    c.classList.add('pop');
+  }
+
+  tutorialHide() {
+    this.el['tut-card'].classList.add('hidden');
+  }
+
+  hintBar(text, secs) {
+    const h = this.el['hint-bar'];
+    h.textContent = text;
+    h.classList.add('show');
+    clearTimeout(this._ht);
+    this._ht = setTimeout(() => h.classList.remove('show'), (secs || 12) * 1000);
+  }
+
+  setBoostFx(on) {
+    this.el['boost-fx'].classList.toggle('on', on);
   }
 
   popup(text, cls, worldPos) {
@@ -176,6 +207,10 @@ export class UI {
       else if (d.type === 'planet') { col = '#ffb45a'; sz = 3.6; }
       else if (d.type === 'pup') { col = '#ffd76b'; sz = 2.6; }
       else if (d.type === 'comet') { col = '#aef1ff'; sz = 3; }
+      else if (d.type === 'tank') { col = '#ff8a5a'; sz = 2.8; }
+      else if (d.type === 'sat') { col = '#9ab0c8'; sz = 2.8; }
+      else if (d.type === 'mine') { col = '#ff4a4a'; sz = 2.6; }
+      else if (d.type === 'art') { col = '#e6d2ff'; sz = 3.2; }
       g.fillStyle = col;
       g.beginPath(); g.arc(px, py, sz, 0, Math.PI * 2); g.fill();
     }

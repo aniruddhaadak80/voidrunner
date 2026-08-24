@@ -41,13 +41,47 @@ const state = {
   heat: 0, overheat: 0, fireCd: 0, targetLock: false,
   shield: 0, mult2T: 0, overdriveT: 0,
   sector: 0, sectorName: '', kills: 0, powerups: 0, runTime: 0, bonusXp: 0,
-  objectives: []
+  objectives: [], tutorial: false
 };
 
 const ctx = {};
 let frameEMA = 16, drsTimer = 0, drsScale = 1, basePr = 2;
 let radarT = 0;
 let ghostShip = null;
+const tut = { on: false, step: -1, boostTime: 0, rolled: false, spawnT: 0, doneT: 0 };
+const TUT_TOTAL = 6;
+const TUT_STEPS = [
+  {
+    id: 'move',
+    text: 'Welcome, pilot! STEER with your mouse. On phone, drag your finger. Grab 5 blue crystals!',
+    keys: 'MOUSE / DRAG'
+  },
+  {
+    id: 'boost',
+    text: 'Nice flying! Now speed up: HOLD LEFT CLICK. Phone: hold BOOST. Gamepad: hold RT.',
+    keys: 'HOLD LMB / BOOST / RT'
+  },
+  {
+    id: 'shoot',
+    text: 'See the grey rocks? Just AIM at them — your ship fires by itself. Destroy 3!',
+    keys: 'AIM WITH MOUSE'
+  },
+  {
+    id: 'roll',
+    text: 'Time to dodge like a pro! Do a BARREL ROLL: press SPACE. Phone: tap ROLL. Gamepad: X.',
+    keys: 'SPACE / ROLL / X'
+  },
+  {
+    id: 'gate',
+    text: 'See the big green RING? Fly through the middle of it for big points!',
+    keys: 'FLY THROUGH'
+  },
+  {
+    id: 'done',
+    text: 'PERFECT! You know everything now. Grab crystals, shoot rocks, dodge red things. Good luck out there, pilot!',
+    keys: ''
+  }
+];
 
 function init() {
   const splashMsg = document.querySelector('#splash .msg');
@@ -296,6 +330,72 @@ function bindCallbacks() {
       ctx.ui.popup('WELL ESCAPED +' + Math.floor(400 * state.mult), 'gold', ctx.ship.group.position);
       ctx.ui.toast('GRAVITY WELL ESCAPED');
       checkLiveAchievements();
+    },
+    onTankDestroyed: e => {
+      const p = e.mesh.position;
+      state.kills++;
+      const val = Math.floor(60 * state.mult);
+      state.score += val;
+      ctx.ui.popup('+' + val + ' FUEL TANK', 'orange', p);
+      ctx.fx.expl.spawn(p, 0xffa050, 1.7);
+      ctx.fx.shocks.spawn(p, 0xffc090, 34);
+      ctx.fx.debris.spawn(p, 7, 1.3);
+      ctx.fx.flash.trigger(p, 0xffc890, 1.2);
+      ctx.audio.explosion(false);
+      ctx.world.spawnDrop(p);
+      ctx.world.spawnCrystal(p.x + 3, p.y + 2, p.z);
+      if (!state.tutorial) state.trauma = Math.min(0.5, state.trauma + 0.25);
+    },
+    onTankCrash: e => {
+      const p = e.mesh.position;
+      ctx.fx.expl.spawn(p, 0xffa050, 1.5);
+      ctx.fx.shocks.spawn(p, 0xffc090, 30);
+      ctx.fx.flash.trigger(p, 0xffc890, 1.1);
+      ctx.audio.explosion(false);
+      tmpV2.set(ctx.ship.group.position).sub(p).normalize();
+      ctx.ship.vel.addScaledVector(tmpV2, 46);
+      state.trauma = Math.min(1, state.trauma + 0.55);
+      damage(25, 'FUEL TANK EXPLOSION');
+      state.invuln = Math.max(state.invuln, 1.0);
+    },
+    onSatKilled: e => {
+      state.kills++;
+      const val = Math.floor(50 * state.mult);
+      state.score += val;
+      ctx.ui.popup('+' + val + ' SATELLITE', 'white', e.mesh.position);
+      ctx.fx.expl.spawn(e.mesh.position, 0xbfd4ff, 1.0);
+      ctx.fx.debris.spawn(e.mesh.position, 6, 1);
+      ctx.audio.blip(150, 0.14, 'sawtooth', 0.16);
+      ctx.world.spawnDrop(e.mesh.position);
+    },
+    onSatCrash: e => {
+      ctx.fx.expl.spawn(e.mesh.position, 0xbfd4ff, 1.1);
+      ctx.audio.explosion(false);
+      damage(20, 'SATELLITE COLLISION');
+      state.invuln = Math.max(state.invuln, 1.0);
+    },
+    onMineDetonate: pos => {
+      ctx.fx.expl.spawn(pos, 0xff6a5a, 1.4);
+      ctx.fx.shocks.spawn(pos, 0xff8a7a, 30);
+      ctx.fx.flash.trigger(pos, 0xffa090, 1.0);
+      ctx.audio.explosion(false);
+      state.trauma = Math.min(1, state.trauma + 0.5);
+      damage(20, 'MINE DETONATION');
+      state.invuln = Math.max(state.invuln, 0.9);
+    },
+    onMineShot: pos => {
+      ctx.fx.expl.spawn(pos, 0xff6a5a, 0.9);
+      ctx.fx.shocks.spawn(pos, 0xff8a7a, 22);
+      state.score += 40;
+      ctx.ui.popup('+40 MINE CLEARED', 'orange', pos);
+      ctx.audio.blip(180, 0.1, 'square', 0.14);
+    },
+    onArtifactScanned: pos => {
+      state.score += 250;
+      ctx.ui.popup('ARTIFACT +250', 'purple', pos);
+      ctx.ui.toast('ALIEN ARTIFACT SCANNED');
+      ctx.fx.shocks.spawn(pos, 0xc07aff, 26);
+      ctx.audio.objective();
     }
   };
 }
@@ -306,6 +406,10 @@ function multOf() {
 
 function damage(amount, label) {
   if (state.invuln > 0 || mode !== 'play') return;
+  if (state.tutorial) {
+    ctx.fx.shocks.spawn(ctx.ship.group.position, 0xffc090, 16);
+    return;
+  }
   if (state.shield > 0) {
     state.shield--;
     state.invuln = Math.max(state.invuln, 0.9);
@@ -475,6 +579,104 @@ function checkObjectives() {
   }
 }
 
+function tutorialStart() {
+  state.tutorial = true;
+  tut.on = true;
+  tut.step = 0;
+  tut.boostTime = 0;
+  tut.rolled = false;
+  tut.spawnT = 0;
+  tut.doneT = 0;
+  startRun();
+  ctx.world.tutorialKinds = ['cry', 'ast', 'gate'];
+  showTutCard();
+  ctx.ui.toast('TRAINING STARTED — FOLLOW THE CARDS');
+}
+
+function showTutCard() {
+  const s = TUT_STEPS[tut.step];
+  ctx.ui.tutorialCard(s.text, s.keys, tut.step, TUT_TOTAL);
+}
+
+function tutorialUpdate(dt) {
+  if (!tut.on || mode !== 'play') return;
+  const step = TUT_STEPS[tut.step];
+  if (!step) return;
+  const shipPos = ctx.ship.group.position;
+  tut.spawnT -= dt;
+
+  if (step.id === 'move') {
+    if (tut.spawnT <= 0) {
+      tut.spawnT = 1.4;
+      let alive = 0;
+      for (const c of ctx.world.crys) if (c.alive) alive++;
+      if (alive < 6) {
+        for (let i = 0; i < 4; i++) {
+          const x = THREE.MathUtils.clamp(shipPos.x + (Math.random() - 0.5) * 90, -120, 120);
+          const y = THREE.MathUtils.clamp(shipPos.y + (Math.random() - 0.5) * 60, -75, 75);
+          ctx.world.spawnCrystal(x, y, -780 - i * 45);
+        }
+      }
+    }
+    if (state.crystals >= 5) tutorialAdvance();
+  } else if (step.id === 'boost') {
+    if (state.boostEff) tut.boostTime += dt;
+    if (tut.boostTime >= 1.5) tutorialAdvance();
+  } else if (step.id === 'shoot') {
+    if (tut.spawnT <= 0) {
+      tut.spawnT = 1.5;
+      let alive = 0;
+      for (const a of ctx.world.asts) if (a.alive) alive++;
+      if (alive < 2) {
+        ctx.world.spawnAsteroid(
+          THREE.MathUtils.clamp(shipPos.x + (Math.random() - 0.5) * 100, -110, 110),
+          THREE.MathUtils.clamp(shipPos.y + (Math.random() - 0.5) * 70, -70, 70),
+          -750, 2.6 + Math.random() * 1.6, 0, 0, 0.4
+        );
+      }
+    }
+    if (state.kills >= 3) tutorialAdvance();
+  } else if (step.id === 'roll') {
+    if (tut.rolled) tutorialAdvance();
+  } else if (step.id === 'gate') {
+    if (tut.spawnT <= 0) {
+      tut.spawnT = 2.4;
+      let alive = 0;
+      for (const g of ctx.world.gates) if (g.alive) alive++;
+      if (alive === 0) ctx.world.spawnGateAt(shipPos.x, shipPos.y, -820);
+    }
+    if (state.gates >= 1) tutorialAdvance();
+  } else if (step.id === 'done') {
+    tut.doneT += dt;
+    if (tut.doneT >= 3.5) tutorialFinish(false);
+  }
+}
+
+function tutorialAdvance() {
+  ctx.audio.objective();
+  tut.step++;
+  if (tut.step >= TUT_TOTAL) { tutorialFinish(false); return; }
+  showTutCard();
+}
+
+function tutorialFinish(skipped) {
+  tut.on = false;
+  state.tutorial = false;
+  ctx.world.tutorialKinds = null;
+  ctx.ui.tutorialHide();
+  if (!ctx.save.tutorialDone) {
+    ctx.save.tutorialDone = true;
+    state.bonusXp += 500;
+    persistSave(ctx.save);
+  }
+  if (!skipped) {
+    ctx.ui.toast('TRAINING COMPLETE — +500 XP');
+    ctx.audio.gate();
+  } else {
+    ctx.ui.toast('TRAINING SKIPPED');
+  }
+}
+
 function resetRunStats() {
   const lvl = levelInfo(ctx.save.xp).level;
   Object.assign(state, {
@@ -508,6 +710,10 @@ function toMenu() {
   mode = 'attract';
   ctx.view = 'chase';
   ctx.world.reset();
+  ctx.world.tutorialKinds = null;
+  tut.on = false;
+  state.tutorial = false;
+  ctx.ui.tutorialHide();
   ctx.ship.reset();
   ctx.fx.trails.clear();
   ctx.fx.trails.setVisible(true);
@@ -518,6 +724,8 @@ function toMenu() {
   ctx.ui.showHud(false);
   ctx.ui.layer('menu-main');
   ctx.ui.refreshMenu(ctx.save);
+  const playBtn = document.getElementById('btn-play');
+  if (playBtn) playBtn.textContent = ctx.save.tutorialDone ? 'LAUNCH MISSION' : 'START TRAINING';
   document.body.classList.remove('playing', 'critical', 'danger');
   setTouchControls(false);
   if (ghostShip) ghostShip.setVisible(false);
@@ -570,6 +778,13 @@ function startRun() {
   ctx.audio.init();
   ctx.audio.engineOn();
   camera.position.set(0, 4.5, 14);
+  if (!state.tutorial) {
+    const padHint = gp.on ? ' · STICK steer · RT boost · X roll' : '';
+    const hint = isTouch
+      ? 'DRAG anywhere to steer · hold BOOST · tap ROLL'
+      : 'MOVE MOUSE to steer · HOLD LMB boost · RMB brake · SPACE roll · guns aim with you' + padHint;
+    ctx.ui.hintBar(hint, 16);
+  }
 }
 
 function pauseGame() {
@@ -597,7 +812,8 @@ function quitToMenu() {
 }
 
 const actions = {
-  play: () => { ctx.audio.init(); ctx.audio.click(); startRun(); },
+  play: () => { ctx.audio.init(); ctx.audio.click(); if (ctx.save.tutorialDone) startRun(); else tutorialStart(); },
+  training: () => { ctx.audio.init(); ctx.audio.click(); tutorialStart(); },
   hangar: () => { ctx.audio.click(); openHangar(); },
   profile: () => { ctx.audio.click(); openProfile(); },
   ach: () => { ctx.audio.click(); ctx.ui.renderAch(ctx.save); ctx.ui.layer('menu-ach'); },
@@ -612,7 +828,7 @@ const actions = {
   resume: () => { ctx.audio.click(); resumeGame(); },
   restart: () => { ctx.audio.click(); startRun(); },
   quit: () => { ctx.audio.click(); quitToMenu(); },
-  overRestart: () => { ctx.audio.click(); startRun(); },
+  overRestart: () => { ctx.audio.click(); if (ctx.save.tutorialDone) startRun(); else tutorialStart(); },
   overHangar: () => { ctx.audio.click(); openHangar(); },
   overMenu: () => { ctx.audio.click(); quitToMenu(); },
   fullscreen: () => {
@@ -635,6 +851,7 @@ function bindActions() {
   ctx.actions = actions;
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
   on('btn-play', actions.play);
+  on('btn-training', actions.training);
   on('btn-hangar', actions.hangar);
   on('btn-profile', actions.profile);
   on('btn-ach', actions.ach);
@@ -657,6 +874,7 @@ function bindActions() {
   on('over-menu', actions.overMenu);
   on('btn-pause', pauseToggleBtn);
   on('btn-mute', actions.muteToggle);
+  on('tut-skip', () => { ctx.audio.click(); tutorialFinish(true); });
 
   const hold = (id, setter) => {
     const el = document.getElementById(id);
@@ -892,6 +1110,7 @@ function doRoll() {
   ctx.ship.vel.x += state.rollDir * 40;
   state.invuln = Math.max(state.invuln, 0.65);
   ctx.audio.whoosh();
+  if (tut.on && TUT_STEPS[tut.step] && TUT_STEPS[tut.step].id === 'roll') tut.rolled = true;
 }
 
 function readSteerTargets() {
@@ -1125,11 +1344,13 @@ function playSim(dt, rawDt) {
   state.steer.x += (state.steer.tx - state.steer.x) * Math.min(1, dt * 7);
   state.steer.y += (state.steer.ty - state.steer.y) * Math.min(1, dt * 7);
   flightPhysics(dt);
+  tutorialUpdate(dt);
   updateWeapons(dt);
   updateBolts(dt);
   activeBolts.length = 0;
   for (const b of boltPool) if (b.alive) activeBolts.push(b);
   ctx.world.update(dt, false, activeBolts);
+  ctx.ui.setBoostFx(state.boostEff);
   for (const b of boltPool) if (!b.alive) b.mesh.visible = false;
   updateSectors();
   updateGhost(dt);
@@ -1310,8 +1531,20 @@ window.__vrDebug = () => ({
   sector: state.sector,
   shield: state.shield,
   kills: state.kills,
+  crystals: state.crystals,
+  gates: state.gates,
+  tutOn: tut.on,
+  tutStep: tut.step,
   objectives: state.objectives.map(o => o.done).join(','),
   bolts: boltPool.filter(b => b.alive).length
 });
+
+{
+  const chip = document.getElementById('device-chip');
+  if (chip) {
+    chip.textContent = isTouch ? 'TOUCH CONTROLS READY' : 'MOUSE + KEYBOARD READY';
+    addEventListener('gamepadconnected', () => { chip.textContent += ' · GAMEPAD FOUND'; });
+  }
+}
 
 init();

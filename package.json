@@ -1,0 +1,13 @@
+﻿{
+  "name": "voidrunner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "VOIDRUNNER - deep-space infinite flight simulator",
+  "scripts": {
+    "test": "node test-headless.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.8.0"
+  }
+}

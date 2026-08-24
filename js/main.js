@@ -2,14 +2,42 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { load as loadSave, persist as persistSave, SKINS, ACH, SECTOR_NAMES, levelInfo, skinById } from './save.js';
+import { load as loadSave, persist as persistSave, SKINS, ACH, SECTOR_NAMES, levelInfo, skinById, UPGRADES, upgradeCost, dailyInfo } from './save.js';
 import { AudioSys } from './audio.js';
 import { Stars, Dust, Nebula, NEBULA_PALETTES } from './fx.js';
-import { Explosions, Shocks, Debris, Flash, Trails } from './fx2.js';
+import { Explosions, Shocks, Debris, Flash, Trails, Smoke } from './fx2.js';
 import { Ship } from './ship.js';
 import { World } from './world.js';
+import { Boss } from './boss.js';
 import { UI } from './ui.js';
+
+const RADIAL_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uStr: { value: 0 },
+    uCenter: { value: null }
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uStr; uniform vec2 uCenter;
+    varying vec2 vUv;
+    void main(){
+      vec2 dir = vUv - uCenter;
+      float d = length(dir);
+      vec4 sum = vec4(0.0);
+      for(int i=0;i<8;i++){
+        float t = float(i)/7.0;
+        sum += texture2D(tDiffuse, vUv - dir * t * uStr * 0.14 * smoothstep(0.15,0.85,d));
+      }
+      gl_FragColor = mix(texture2D(tDiffuse, vUv), sum/8.0, uStr);
+    }
+  `
+};
 
 const W = 150, H = 95;
 const isTouch = window.matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
@@ -41,13 +69,17 @@ const state = {
   heat: 0, overheat: 0, fireCd: 0, targetLock: false,
   shield: 0, mult2T: 0, overdriveT: 0,
   sector: 0, sectorName: '', kills: 0, powerups: 0, runTime: 0, bonusXp: 0,
-  objectives: [], tutorial: false
+  objectives: [], tutorial: false, daily: false, dailyMod: null,
+  targetPos: new THREE.Vector3(), hasTarget: false, bossKills: 0, smokeT: 0
 };
 
 const ctx = {};
 let frameEMA = 16, drsTimer = 0, drsScale = 1, basePr = 2;
 let radarT = 0;
 let ghostShip = null;
+let boss = null;
+let lastBossSector = -1;
+let radialPass = null;
 const tut = { on: false, step: -1, boostTime: 0, rolled: false, spawnT: 0, doneT: 0 };
 const TUT_TOTAL = 6;
 const TUT_STEPS = [
@@ -130,7 +162,8 @@ function init() {
     expl: new Explosions(scene, 10),
     shocks: new Shocks(scene, 8),
     debris: new Debris(scene, 16),
-    flash: new Flash(scene, 3)
+    flash: new Flash(scene, 3),
+    smoke: new Smoke(scene, 14)
   };
 
   ctx.ship = new Ship(scene);
@@ -185,6 +218,9 @@ function buildComposer(samples) {
   composer.addPass(new RenderPass(scene, camera));
   bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.85, 0.55, 0.62);
   composer.addPass(bloomPass);
+  radialPass = new ShaderPass(RADIAL_SHADER);
+  radialPass.uniforms.uCenter.value = new THREE.Vector2(0.5, 0.44);
+  composer.addPass(radialPass);
   composer.addPass(new OutputPass());
 }
 
@@ -208,6 +244,7 @@ function applyQuality(q) {
   applyPixelRatio();
   bloomPass.enabled = q !== 'low';
   bloomPass.strength = q === 'high' ? 0.85 : 0.65;
+  if (radialPass) radialPass.enabled = q !== 'low';
 }
 
 function updateDRS(rawDt) {
@@ -396,6 +433,61 @@ function bindCallbacks() {
       ctx.ui.toast('ALIEN ARTIFACT SCANNED');
       ctx.fx.shocks.spawn(pos, 0xc07aff, 26);
       ctx.audio.objective();
+    },
+    bossFired: () => ctx.audio.blip(240, 0.12, 'sawtooth', 0.12),
+    bossCoreHit: pos => {
+      ctx.fx.flash.trigger(pos, 0xffb060, 0.4);
+      ctx.audio.blip(420, 0.05, 'square', 0.1);
+    },
+    bossCoreDestroyed: pos => {
+      ctx.fx.expl.spawn(pos, 0xffb060, 1.4);
+      ctx.fx.shocks.spawn(pos, 0xffd0a0, 30);
+      ctx.fx.debris.spawn(pos, 6, 1.2);
+      ctx.fx.flash.trigger(pos, 0xffd0a0, 1.2);
+      ctx.audio.explosion(false);
+      ctx.ui.popup('WEAK POINT DOWN', 'gold', pos);
+      state.trauma = Math.min(1, state.trauma + 0.4);
+    },
+    bossExposed: () => {
+      ctx.ui.banner('CORES DESTROYED — HIT THE MAIN CORE!');
+      ctx.audio.sectorSfx();
+      ctx.ui.toast('DREADNOUGHT ARMOR EXPOSED');
+    },
+    bossExplosion: (pos, power) => {
+      ctx.fx.expl.spawn(pos, 0xffb060, power);
+      ctx.fx.flash.trigger(pos, 0xffd0a0, power * 0.8);
+    },
+    bossDestroyed: pos => {
+      ctx.fx.expl.spawn(pos, 0xffc27d, 2.4);
+      ctx.fx.shocks.spawn(pos, 0xffd9a0, 60);
+      ctx.fx.debris.spawn(pos, 10, 1.8);
+      ctx.fx.flash.trigger(pos, 0xffe0b0, 2);
+      state.score += 5000;
+      state.bossKills++;
+      state.trauma = 1;
+      state.slowT = 0.8;
+      state.timeScale = 0.3;
+      ctx.ui.popup('DREADNOUGHT DESTROYED +5000', 'gold', pos);
+      ctx.ui.toast('BOSS DESTROYED — +5 CORES');
+      ctx.audio.explosion(true);
+      for (let i = 0; i < 3; i++) {
+        tmpV1.set(pos.x + (i - 1) * 14, pos.y + 6, pos.z);
+        ctx.world.spawnPup(tmpV1.x, tmpV1.y, tmpV1.z, ['shield', 'surge', 'multi'][i]);
+      }
+      ctx.ui.setBoss(null);
+      if (boss) { boss.dispose(); boss = null; }
+      ctx.world.bossMode = false;
+      checkLiveAchievements();
+    },
+    bossBoltHit: pos => {
+      ctx.fx.shocks.spawn(pos, 0xff7a6a, 14);
+      damage(15, 'PLASMA HIT');
+    },
+    bossRam: n => {
+      ctx.ship.vel.addScaledVector(n, 60);
+      state.invuln = Math.max(state.invuln, 1.0);
+      state.trauma = Math.min(1, state.trauma + 0.6);
+      damage(30, 'DREADNOUGHT COLLISION');
     }
   };
 }
@@ -510,6 +602,23 @@ function finalizeRun(causeText) {
   const unlockedAch = evalAchievements();
   const newLevel = levelInfo(save.xp).level;
   const unlocks = SKINS.filter(s => s.req > prevLevel && s.req <= newLevel);
+
+  const coresEarned = Math.floor(score / 2000) + state.bossKills * 5;
+  save.cores += coresEarned;
+  save.stats.coresEarned += coresEarned;
+  save.stats.bosses += state.bossKills;
+
+  let newDailyBest = false;
+  if (state.daily && state.dailyMod) {
+    const di = dailyInfo();
+    if (save.daily.date !== di.key) {
+      save.daily = { date: di.key, best: score, mod: di.mod.id };
+      newDailyBest = score > 0;
+    } else if (score > save.daily.best) {
+      save.daily.best = score;
+      newDailyBest = true;
+    }
+  }
   persistSave(save);
 
   ctx.audio.blip(newBest ? 880 : 520, 0.3, 'triangle', 0.2);
@@ -522,7 +631,7 @@ function finalizeRun(causeText) {
     dist: state.dist, crystals: state.crystals, gates: state.gates,
     nearMisses: state.nearMisses, maxCombo: state.maxCombo, escapes: state.escapes,
     kills: state.kills, objectives: state.objectives,
-    xpGained, prevXp, save, unlocks
+    xpGained, prevXp, save, unlocks, coresEarned, newDailyBest
   });
 }
 
@@ -677,6 +786,31 @@ function tutorialFinish(skipped) {
   }
 }
 
+function spawnBoss() {
+  if (boss) return;
+  boss = new Boss(scene, {
+    bossFired: e => ctx.cb.bossFired(e),
+    bossCoreHit: p => ctx.cb.bossCoreHit(p),
+    bossCoreDestroyed: p => ctx.cb.bossCoreDestroyed(p),
+    bossExposed: () => ctx.cb.bossExposed(),
+    bossExplosion: (p, pw) => ctx.cb.bossExplosion(p, pw),
+    bossDestroyed: p => ctx.cb.bossDestroyed(p),
+    bossBoltHit: p => ctx.cb.bossBoltHit(p),
+    bossRam: n => ctx.cb.bossRam(n)
+  });
+  ctx.world.bossMode = true;
+  ctx.ui.setBoss('DREADNOUGHT', 1);
+  ctx.ui.banner('WARNING — DREADNOUGHT CLASS SIGNATURE');
+  ctx.audio.alarm(true);
+  setTimeout(() => { if (!boss) ctx.audio.alarm(false); }, 3000);
+}
+
+function disposeBoss() {
+  if (boss) { boss.dispose(); boss = null; }
+  ctx.world.bossMode = false;
+  ctx.ui.setBoss(null);
+}
+
 function resetRunStats() {
   const lvl = levelInfo(ctx.save.xp).level;
   Object.assign(state, {
@@ -684,12 +818,22 @@ function resetRunStats() {
     nearMisses: 0, maxCombo: 0, escapes: 0, energy: 100,
     rollT: 0, rollCd: 0, invuln: 0, calm: 0, edgeT: 0,
     trauma: 0, timeScale: 1, slowT: 0, bhDanger: null, damageTaken: 0, consuming: false,
-    heat: 0, overheat: 0, fireCd: 0, targetLock: false,
+  heat: 0, overheat: 0, fireCd: 0, targetLock: false,
+  heatPerShot: 0.085, boltDmg: 1, engineMult: 1, shieldStart: 0, targetIsBoss: false,
     shield: 0, mult2T: 0, overdriveT: 0,
     sector: 0, kills: 0, powerups: 0, runTime: 0, bonusXp: 0
   });
   state.maxHull = 100 + Math.min(60, (lvl - 1) * 5);
+  const up = ctx.save.upgrades;
+  state.maxHull += up.hull * 10;
+  state.shieldStart = up.shield >= 5 ? 2 : up.shield >= 3 ? 1 : 0;
+  state.shield = state.shieldStart;
+  state.heatPerShot = 0.085 * (1 - 0.08 * up.guns);
+  state.boltDmg = 1 + (up.guns >= 3 ? 1 : 0) + (up.guns >= 5 ? 1 : 0);
+  state.engineMult = 1 + 0.02 * up.engine;
+  if (state.daily && state.dailyMod && state.dailyMod.id === 'GLASS') state.maxHull = 60;
   state.hull = state.maxHull;
+  ctx.world.magnetR = 19 + up.magnet * 6;
   state.sectorName = 'SECTOR 1 — ' + SECTOR_NAMES[0];
   state.objectives = pickObjectives();
   state.ghostRec = [];
@@ -698,6 +842,8 @@ function resetRunStats() {
   input.tx = input.ty = 0;
   input.stickX = 0; input.stickY = 0;
   consume = null;
+  disposeBoss();
+  lastBossSector = -1;
   for (const b of boltPool) { b.alive = false; b.mesh.visible = false; }
   if (ghostShip) ghostShip.setVisible(false);
   ctx.fx.neb.setPalette(NEBULA_PALETTES[0]);
@@ -711,6 +857,7 @@ function toMenu() {
   ctx.view = 'chase';
   ctx.world.reset();
   ctx.world.tutorialKinds = null;
+  disposeBoss();
   tut.on = false;
   state.tutorial = false;
   ctx.ui.tutorialHide();
@@ -735,7 +882,7 @@ function openHangar() {
   mode = 'attract';
   ctx.view = 'orbit';
   ctx.world.reset();
-  ctx.ui.renderHangar(ctx.save, actEquip, actPreview);
+  ctx.ui.renderHangar(ctx.save, actEquip, actPreview, actions.upgrade);
   ctx.ui.layer('menu-hangar');
 }
 
@@ -744,12 +891,45 @@ function openProfile() {
   ctx.ui.layer('menu-profile');
 }
 
+function dailyStart() {
+  const di = dailyInfo();
+  startRun();
+  state.daily = true;
+  state.dailyMod = di.mod;
+  ctx.world.setSeed(di.seed);
+  ctx.world.setModifier(di.mod.id);
+  if (di.mod.id === 'GLASS') {
+    state.maxHull = 60;
+    state.hull = 60;
+  }
+  ctx.ui.banner('DAILY RUN — ' + di.mod.name + ': ' + di.mod.desc);
+  ctx.ui.toast('DAILY CHALLENGE — ' + di.mod.name);
+}
+
+function applyUpgrade(id) {
+  const up = ctx.save.upgrades;
+  const lvl = up[id] || 0;
+  if (lvl >= 5) return;
+  const cost = upgradeCost(lvl);
+  if (ctx.save.cores < cost) {
+    ctx.ui.toast('NOT ENOUGH CORES — NEED ' + cost);
+    ctx.audio.blip(200, 0.15, 'square', 0.12);
+    return;
+  }
+  ctx.save.cores -= cost;
+  up[id] = lvl + 1;
+  persistSave(ctx.save);
+  ctx.audio.powerup();
+  ctx.ui.renderHangar(ctx.save, actEquip, actPreview, actions.upgrade);
+  ctx.ui.toast('UPGRADE INSTALLED — ' + id.toUpperCase() + ' LV' + (lvl + 1));
+}
+
 function actEquip(s) {
   ctx.save.equipped = s.id;
   persistSave(ctx.save);
   ctx.ship.setSkin(s);
   ctx.fx.trails.setGlow(s.glow);
-  ctx.ui.renderHangar(ctx.save, actEquip, actPreview);
+  ctx.ui.renderHangar(ctx.save, actEquip, actPreview, actions.upgrade);
   ctx.ui.toast(s.name.toUpperCase() + ' EQUIPPED');
   ctx.audio.click();
 }
@@ -760,6 +940,10 @@ function actPreview(s) {
 
 function startRun() {
   runSeq++;
+  state.daily = false;
+  state.dailyMod = null;
+  ctx.world.setModifier(null);
+  ctx.world.rand = Math.random;
   resetRunStats();
   ctx.world.reset();
   ctx.ship.reset();
@@ -814,6 +998,8 @@ function quitToMenu() {
 const actions = {
   play: () => { ctx.audio.init(); ctx.audio.click(); if (ctx.save.tutorialDone) startRun(); else tutorialStart(); },
   training: () => { ctx.audio.init(); ctx.audio.click(); tutorialStart(); },
+  daily: () => { ctx.audio.init(); ctx.audio.click(); dailyStart(); },
+  upgrade: id => applyUpgrade(id),
   hangar: () => { ctx.audio.click(); openHangar(); },
   profile: () => { ctx.audio.click(); openProfile(); },
   ach: () => { ctx.audio.click(); ctx.ui.renderAch(ctx.save); ctx.ui.layer('menu-ach'); },
@@ -1168,32 +1354,59 @@ function updateWeapons(dt) {
     state.overheat -= dt;
     ctx.ui.setLock(false);
     state.targetLock = false;
+    state.hasTarget = false;
     return;
   }
   if (mode !== 'play' || !ctx.save.settings.autofire) {
     ctx.ui.setLock(false);
     state.targetLock = false;
+    state.hasTarget = false;
     return;
   }
 
   camera.getWorldDirection(tmpV3);
-  let best = null, bestCos = 0.994;
+  state.hasTarget = false;
+  let bestCos = 0.994;
   const shipPos = ctx.ship.group.position;
-  const consider = (x, y, z) => {
-    tmpV1.set(x - shipPos.x, y - shipPos.y, z - shipPos.z);
-    const d = tmpV1.length();
-    if (d < 12 || d > 760) return;
-    const c = tmpV1.dot(tmpV3) / d;
-    if (c > bestCos) { bestCos = c; best = tmpV2.set(x, y, z).clone(); }
-  };
-  for (const e of ctx.world.asts) {
-    if (e.alive && e.z < shipPos.z) consider(e.x, e.y, e.z);
-  }
-  for (const e of ctx.world.comets) {
-    if (e.alive && e.mesh.position.z < shipPos.z) consider(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+
+  if (boss && boss.alive && boss.state === 'active') {
+    const local = boss.targets();
+    if (local) {
+      state.targetPos.copy(boss.pos).add(local);
+      state.hasTarget = true;
+      state.targetIsBoss = true;
+    }
+  } else {
+    state.targetIsBoss = false;
+    const consider = (x, y, z) => {
+      tmpV1.set(x - shipPos.x, y - shipPos.y, z - shipPos.z);
+      const d = tmpV1.length();
+      if (d < 12 || d > 760) return;
+      const c = tmpV1.dot(tmpV3) / d;
+      if (c > bestCos) {
+        bestCos = c;
+        state.targetPos.set(x, y, z);
+        state.hasTarget = true;
+      }
+    };
+    for (const e of ctx.world.asts) {
+      if (e.alive && e.z < shipPos.z) consider(e.x, e.y, e.z);
+    }
+    for (const e of ctx.world.comets) {
+      if (e.alive && e.mesh.position.z < shipPos.z) consider(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+    }
+    for (const e of ctx.world.tanks) {
+      if (e.alive && e.mesh.position.z < shipPos.z) consider(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+    }
+    for (const e of ctx.world.sats) {
+      if (e.alive && e.mesh.position.z < shipPos.z) consider(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+    }
+    for (const e of ctx.world.mines) {
+      if (e.alive && e.mesh.position.z < shipPos.z) consider(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+    }
   }
 
-  if (!best) {
+  if (!state.hasTarget) {
     ctx.ui.setLock(false);
     state.targetLock = false;
     return;
@@ -1206,13 +1419,14 @@ function updateWeapons(dt) {
   if (!b) return;
   tmpV1.set(0, 0.15, -2.6).applyMatrix4(ctx.ship.group.matrixWorld);
   b.pos.copy(tmpV1);
-  b.dir.copy(best).sub(tmpV1).normalize();
+  b.dir.copy(state.targetPos).sub(tmpV1).normalize();
   b.life = 1.1;
   b.alive = true;
+  b.dmg = state.boltDmg;
   b.mesh.visible = true;
   b.mesh.quaternion.setFromUnitVectors(tmpV2.set(0, 0, -1), b.dir);
   state.fireCd = 0.18;
-  state.heat = Math.min(1, state.heat + 0.085);
+  state.heat = Math.min(1, state.heat + state.heatPerShot);
   if (state.heat >= 1) {
     state.overheat = 1.7;
     ctx.audio.overheat();
@@ -1227,7 +1441,8 @@ function updateBolts(dt) {
     if (!b.alive) { b.mesh.visible = false; continue; }
     b.pos.addScaledVector(b.dir, 900 * dt);
     b.life -= dt;
-    if (b.life <= 0 || b.pos.z < ctx.ship.group.position.z - 1700) b.alive = false;
+    if (b.life <= 0 || b.pos.z < ctx.ship.group.position.z - 1700) { b.alive = false; continue; }
+    if (boss && boss.alive && boss.tryHit(b.pos)) b.alive = false;
   }
 }
 
@@ -1298,6 +1513,11 @@ function updateSectors() {
     ctx.fx.neb.setPalette(NEBULA_PALETTES[sector % NEBULA_PALETTES.length]);
     ctx.ui.banner('ENTERING ' + state.sectorName);
     ctx.audio.sectorSfx();
+    if (sector % 4 === 2) ctx.world.spawnStation(Math.random() < 0.5 ? -1 : 1);
+    if (!state.tutorial && sector > 0 && sector % 3 === 0 && sector !== lastBossSector) {
+      lastBossSector = sector;
+      spawnBoss();
+    }
   }
 }
 
@@ -1330,7 +1550,8 @@ function updateGhost(dt) {
 function playSim(dt, rawDt) {
   state.dist += state.speed * dt;
   state.runTime += rawDt;
-  const base = 46 + Math.min(92, state.dist * 0.0042);
+  const fast = state.daily && state.dailyMod && state.dailyMod.id === 'FAST' ? 1.2 : 1;
+  const base = (46 + Math.min(92, state.dist * 0.0042)) * state.engineMult * fast;
   state.boostEff = state.boost && (state.energy > 0.5 || state.overdriveT > 0) && !state.brake;
   if (state.boostEff && state.overdriveT <= 0) state.energy = Math.max(0, state.energy - 26 * dt);
   else if (!state.boostEff) state.energy = Math.min(100, state.energy + 11 * dt);
@@ -1347,10 +1568,23 @@ function playSim(dt, rawDt) {
   tutorialUpdate(dt);
   updateWeapons(dt);
   updateBolts(dt);
+  if (boss && boss.alive) {
+    boss.update(dt, ctx.ship.group.position, ctx.ship.r);
+    ctx.ui.setBoss('DREADNOUGHT', Math.max(0, Math.min(1, boss.healthFrac())));
+  }
   activeBolts.length = 0;
   for (const b of boltPool) if (b.alive) activeBolts.push(b);
   ctx.world.update(dt, false, activeBolts);
   ctx.ui.setBoostFx(state.boostEff);
+
+  if (state.hull < 35 && state.hull > 0) {
+    state.smokeT -= dt;
+    if (state.smokeT <= 0) {
+      state.smokeT = 0.09;
+      tmpV1.set((Math.random() - 0.5) * 0.8, 0.3, 2.2).applyMatrix4(ctx.ship.group.matrixWorld);
+      ctx.fx.smoke.spawn(tmpV1, 2.4);
+    }
+  }
   for (const b of boltPool) if (!b.alive) b.mesh.visible = false;
   updateSectors();
   updateGhost(dt);
@@ -1460,6 +1694,7 @@ function loop() {
   const rawDt = Math.min(clock.getDelta(), 0.05);
   lastDt = rawDt;
   elapsed += rawDt;
+  state.mode = mode;
 
   if (mode === 'pause') {
     composer.render();
@@ -1502,11 +1737,25 @@ function loop() {
   ctx.fx.shocks.update(rawDt, camera);
   ctx.fx.debris.update(rawDt);
   ctx.fx.flash.update(rawDt);
+  ctx.fx.smoke.update(rawDt, state.speed);
+
+  const spd01 = THREE.MathUtils.clamp((state.speed - 40) / 100, 0, 1);
+  const musicIntensity = THREE.MathUtils.clamp(
+    spd01 * 0.55 + (state.bhDanger ? 0.35 : 0) + (boss && boss.alive ? 0.3 : 0), 0, 1
+  );
+  ctx.audio.updateMusic(musicIntensity, state.boostEff && mode === 'play');
+  ctx.audio.update();
 
   cameraUpdate(rawDt);
 
+  if (radialPass) {
+    const bt = mode === 'play' && state.boostEff ? 1 : 0;
+    radialPass.uniforms.uStr.value += (bt - radialPass.uniforms.uStr.value) * Math.min(1, rawDt * 6);
+  }
+
   if (mode === 'play' || mode === 'count') {
     ctx.ui.updateHUD(state, performance.now());
+    ctx.ui.updateBracket(state);
     radarT -= rawDt;
     if (radarT <= 0) {
       radarT = 0.05;
@@ -1533,6 +1782,8 @@ window.__vrDebug = () => ({
   kills: state.kills,
   crystals: state.crystals,
   gates: state.gates,
+  boss: boss ? boss.state : null,
+  cores: ctx.save ? ctx.save.cores : 0,
   tutOn: tut.on,
   tutStep: tut.step,
   objectives: state.objectives.map(o => o.done).join(','),

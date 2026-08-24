@@ -1,4 +1,4 @@
-import { SKINS, ACH, levelInfo, skinById } from './save.js';
+import { SKINS, ACH, UPGRADES, upgradeCost, levelInfo, skinById, dailyInfo } from './save.js';
 
 const $ = id => document.getElementById(id);
 
@@ -13,7 +13,7 @@ export class UI {
       'dmg-flash', 'menu-main', 'menu-over', 'menu-hangar', 'menu-ach', 'menu-profile',
       'menu-help', 'menu-settings', 'pause-overlay', 'countdown', 'toast', 'banner',
       'tut-card', 'tut-text', 'tut-keys', 'tut-dots', 'tut-skip', 'hint-bar',
-      'boost-fx', 'device-chip',
+      'boost-fx', 'device-chip', 'boss-bar', 'boss-fill', 'bracket', 'btn-daily',
       'btn-pause', 'btn-mute', 'btn-full', 'touch-controls', 'btn-boost', 'btn-roll', 'btn-brake'
     ];
     for (const id of ids) this.el[id] = $(id);
@@ -116,6 +116,32 @@ export class UI {
 
   setBoostFx(on) {
     this.el['boost-fx'].classList.toggle('on', on);
+  }
+
+  setBoss(name, frac) {
+    const b = this.el['boss-bar'];
+    if (!name) { b.classList.add('hidden'); return; }
+    b.classList.remove('hidden');
+    this.el['boss-fill'].style.transform = 'scaleX(' + frac + ')';
+  }
+
+  updateBracket(state) {
+    const br = this.el.bracket;
+    if (!state.hasTarget || this.ctx.state.mode !== 'play') {
+      br.classList.add('hidden');
+      return;
+    }
+    const v = state.targetPos.clone().project(this.ctx.camera);
+    if (v.z > 1) { br.classList.add('hidden'); return; }
+    const dist = this.ctx.camera.position.distanceTo(state.targetPos);
+    const size = Math.max(30, Math.min(96, 3000 / Math.max(dist, 1)));
+    const x = (v.x * 0.5 + 0.5) * innerWidth;
+    const y = (-v.y * 0.5 + 0.5) * innerHeight;
+    br.classList.remove('hidden');
+    br.classList.toggle('boss', !!state.targetIsBoss);
+    br.style.width = size + 'px';
+    br.style.height = size + 'px';
+    br.style.transform = 'translate(' + (x - size / 2) + 'px,' + (y - size / 2) + 'px)';
   }
 
   popup(text, cls, worldPos) {
@@ -224,11 +250,55 @@ export class UI {
     this.menuEls.lvl.textContent = 'LV ' + li.level;
     this.menuEls.lvlFill.style.width = (li.pct * 100).toFixed(1) + '%';
     this.menuEls.lvlText.textContent = li.into + ' / ' + li.need + ' XP';
+    const di = dailyInfo();
+    const btn = this.el['btn-daily'];
+    if (btn) {
+      const isToday = save.daily.date === di.key;
+      btn.textContent = 'DAILY RUN — ' + di.mod.name + (isToday ? ' (BEST ' + Math.floor(save.daily.best).toLocaleString() + ')' : '');
+      btn.title = di.mod.desc;
+    }
   }
 
-  renderHangar(save, onEquip, onPreview) {
+  renderHangar(save, onEquip, onPreview, onUpgrade, tab) {
+    this.hangarTab = tab || this.hangarTab || 'skins';
+    const tabsEl = $('hangar-tabs');
+    tabsEl.innerHTML = '';
+    for (const [id, label] of [['skins', 'SHIP SKINS'], ['upgrades', 'UPGRADES']]) {
+      const b = document.createElement('button');
+      b.className = 'tab-btn' + (this.hangarTab === id ? ' on' : '');
+      b.textContent = label;
+      b.addEventListener('click', () => { this.hangarTab = id; this.renderHangar(save, onEquip, onPreview, onUpgrade); });
+      tabsEl.appendChild(b);
+    }
+    const coresEl = $('hangar-cores');
+    if (coresEl) coresEl.textContent = 'CORES: ' + (save.cores || 0);
     const grid = $('hangar-grid');
     grid.innerHTML = '';
+    if (this.hangarTab === 'upgrades') {
+      $('hangar-perk').textContent = 'EARN CORES BY SCORING — 1 CORE PER 2,000 PTS, +5 PER BOSS';
+      const li = levelInfo(save.xp);
+      const perk = $('hangar-perk');
+      perk.textContent = 'HULL FROM LEVEL: +' + Math.min(60, (li.level - 1) * 5) + ' · CORES SPEND INSTANTLY';
+      for (const u of UPGRADES) {
+        const lvl = save.upgrades[u.id] || 0;
+        const maxed = lvl >= u.max;
+        const cost = upgradeCost(lvl);
+        const card = document.createElement('div');
+        card.className = 'upg-card' + (maxed ? ' maxed' : '');
+        let dots = '';
+        for (let i = 0; i < u.max; i++) dots += '<span class="udot' + (i < lvl ? ' on' : '') + '"></span>';
+        card.innerHTML = `
+          <div class="upg-name">${u.name}</div>
+          <div class="upg-desc">${u.desc}</div>
+          <div class="upg-dots">${dots}</div>
+          <button class="upg-btn" ${maxed || save.cores < cost ? 'disabled' : ''}>${maxed ? 'MAX LEVEL' : 'UPGRADE — ' + cost + ' CORES'}</button>`;
+        if (!maxed) {
+          card.querySelector('.upg-btn').addEventListener('click', () => onUpgrade(u.id));
+        }
+        grid.appendChild(card);
+      }
+      return;
+    }
     const li = levelInfo(save.xp);
     $('hangar-perk').textContent = 'LEVEL PERK — HULL INTEGRITY +' + Math.min(60, (li.level - 1) * 5) + ' (MAX ' + (100 + Math.min(60, (li.level - 1) * 5)) + ')';
     for (const s of SKINS) {
@@ -342,8 +412,14 @@ export class UI {
 
     const unl = this.overEls.unlocks;
     unl.innerHTML = '';
+    if (data.newDailyBest) {
+      unl.innerHTML += '<div class="unlock-item" style="--c:#ffd76b">NEW DAILY BEST</div>';
+    }
+    if (data.coresEarned > 0) {
+      unl.innerHTML += '<div class="unlock-item" style="--c:#7df0c8">+' + data.coresEarned + ' UPGRADE CORES</div>';
+    }
     if (data.unlocks.length) {
-      unl.innerHTML = '<div class="unlock-title">NEW UNLOCKS</div>' +
+      unl.innerHTML += '<div class="unlock-title">NEW UNLOCKS</div>' +
         data.unlocks.map(u => `<div class="unlock-item" style="--c:${u.glow}">${u.name} SHIP SKIN</div>`).join('');
     }
     this.layer('menu-over');

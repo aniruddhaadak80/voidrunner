@@ -189,6 +189,53 @@ export class Debris {
   }
 }
 
+export class Smoke {
+  constructor(scene, poolSize) {
+    this.pool = [];
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 4, 32, 32, 32);
+    grad.addColorStop(0, 'rgba(120,120,130,0.7)');
+    grad.addColorStop(1, 'rgba(90,90,100,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    this.tex = new THREE.CanvasTexture(c);
+    for (let i = 0; i < poolSize; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.tex, transparent: true, opacity: 0, depthWrite: false
+      }));
+      sp.visible = false;
+      scene.add(sp);
+      this.pool.push({ sp, life: 0, vel: new THREE.Vector3(), size: 2 });
+    }
+  }
+
+  spawn(origin, size = 2.2) {
+    const s = this.pool.find(p => p.life <= 0) || this.pool[0];
+    s.sp.position.copy(origin);
+    s.sp.position.x += (Math.random() - 0.5) * 1.2;
+    s.sp.position.y += (Math.random() - 0.5) * 1.2;
+    s.vel.set((Math.random() - 0.5) * 6, 3 + Math.random() * 4, 10 + Math.random() * 8);
+    s.size = size * (0.7 + Math.random() * 0.6);
+    s.life = 1;
+    s.sp.visible = true;
+  }
+
+  update(dt, worldSpeed) {
+    for (const s of this.pool) {
+      if (s.life <= 0) continue;
+      s.life -= dt * 1.4;
+      if (s.life <= 0) { s.sp.visible = false; continue; }
+      s.sp.position.addScaledVector(s.vel, dt);
+      s.sp.position.z += (worldSpeed || 0) * dt * 0.4;
+      const sc = s.size * (1.6 - s.life * 0.6);
+      s.sp.scale.setScalar(sc);
+      s.sp.material.opacity = s.life * 0.5;
+    }
+  }
+}
+
 export class Flash {
   constructor(scene, poolSize) {
     this.pool = [];

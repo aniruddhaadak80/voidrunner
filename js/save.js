@@ -24,7 +24,10 @@ export const ACH = [
   { id: 'gunner',   name: 'Gunner',              desc: 'Destroy 100 asteroids with plasma',    test: s => s.stats.kills >= 100 },
   { id: 'empower',  name: 'Empowered',           desc: 'Collect 25 power-ups in total',        test: s => s.stats.powerups >= 25 },
   { id: 'triple',   name: 'Completionist',       desc: 'Complete all 3 objectives in one run', test: s => s.perfectObjectives >= 1 },
-  { id: 'marathon', name: 'Marathoner',          desc: 'Fly 250 km across all runs',           test: s => s.stats.dist >= 250000 }
+  { id: 'marathon', name: 'Marathoner',          desc: 'Fly 250 km across all runs',           test: s => s.stats.dist >= 250000 },
+  { id: 'dread',    name: 'Dreadnought Hunter',  desc: 'Destroy a Dreadnought boss',           test: s => s.stats.bosses >= 1 },
+  { id: 'fleet',    name: 'Fleet Breaker',       desc: 'Destroy 5 Dreadnoughts',               test: s => s.stats.bosses >= 5 },
+  { id: 'tycoon',   name: 'Core Tycoon',         desc: 'Earn 100 upgrade cores in total',      test: s => s.stats.coresEarned >= 100 }
 ];
 
 export const SECTOR_NAMES = [
@@ -32,6 +35,32 @@ export const SECTOR_NAMES = [
   'VEGA SHALLOWS', 'CYGNUS RIFT', 'PERSEUS DRIFT', 'AQUILA FIELD',
   'CETUS DEEP', 'TUCANA SPUR', 'ARA CORRIDOR', 'BOOTES WASTE'
 ];
+
+export const UPGRADES = [
+  { id: 'hull',   name: 'REINFORCED HULL', desc: '+10 max hull per level',              max: 5 },
+  { id: 'guns',   name: 'RAPID COILGUNS',  desc: '-8% heat per level, +damage at Lv3+', max: 5 },
+  { id: 'engine', name: 'AFTERBURNERS',    desc: '+2% base speed per level',            max: 5 },
+  { id: 'magnet', name: 'TRACTOR FIELD',   desc: '+6 crystal magnet range per level',   max: 5 },
+  { id: 'shield', name: 'AEGIS CORE',      desc: 'Start with shields (Lv3: 1, Lv5: 2)', max: 5 }
+];
+
+export function upgradeCost(level) {
+  return (level + 1) * 2;
+}
+
+export const DAILY_MODS = [
+  { id: 'FAST',  name: 'OVERDRIVE PROTOCOL', desc: 'Everything is 20% faster' },
+  { id: 'GLASS', name: 'GLASS CANNON',       desc: 'Hull is fixed at 60' },
+  { id: 'RICH',  name: 'MOTHERLODE',         desc: 'Enemies drop much more loot' },
+  { id: 'SWARM', name: 'SWARM SEASON',       desc: 'Mines and comets everywhere' }
+];
+
+export function dailyInfo(d = new Date()) {
+  const start = new Date(d.getFullYear(), 0, 0);
+  const doy = Math.floor((d - start) / 86400000);
+  const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  return { key, mod: DAILY_MODS[doy % DAILY_MODS.length], seed: doy * 7919 + d.getFullYear() };
+}
 
 export function defaultSave() {
   return {
@@ -42,10 +71,13 @@ export function defaultSave() {
     flawless: 0,
     perfectObjectives: 0,
     xp: 0,
+    cores: 0,
     equipped: 'cadet',
     runs: [],
     ghost: null,
-    stats: { runs: 0, crystals: 0, gates: 0, dist: 0, nearMisses: 0, escapes: 0, kills: 0, playtime: 0, powerups: 0 },
+    upgrades: { hull: 0, guns: 0, engine: 0, magnet: 0, shield: 0 },
+    daily: { date: '', best: 0, mod: '' },
+    stats: { runs: 0, crystals: 0, gates: 0, dist: 0, nearMisses: 0, escapes: 0, kills: 0, playtime: 0, powerups: 0, bosses: 0, coresEarned: 0 },
     ach: {},
     settings: {
       sound: true, quality: 'auto', sens: 1.0, invertY: false, invertX: false,
@@ -65,6 +97,8 @@ export function load() {
       ...data,
       stats: { ...def.stats, ...(data.stats || {}) },
       settings: { ...def.settings, ...(data.settings || {}) },
+      upgrades: { ...def.upgrades, ...(data.upgrades || {}) },
+      daily: { ...def.daily, ...(data.daily || {}) },
       ach: { ...(data.ach || {}) },
       runs: Array.isArray(data.runs) ? data.runs.slice(0, 10) : [],
       ghost: data.ghost || null

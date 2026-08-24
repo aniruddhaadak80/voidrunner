@@ -31,17 +31,17 @@ function planetTexture(seed) {
   const bands = 9 + (seed % 5);
   for (let i = 0; i < bands; i++) {
     const y0 = (i / bands) * 128;
-    const h = 128 / bands + Math.random() * 10;
+    const h = 128 / bands + this.rand() * 10;
     g.fillStyle = pal[i % pal.length];
-    g.globalAlpha = 0.55 + Math.random() * 0.45;
+    g.globalAlpha = 0.55 + this.rand() * 0.45;
     g.fillRect(0, y0, 256, h + 2);
   }
   g.globalAlpha = 0.16;
   for (let i = 0; i < 260; i++) {
-    const x = Math.random() * 256;
-    const y = Math.random() * 128;
-    const r = 2 + Math.random() * 16;
-    g.fillStyle = Math.random() < 0.5 ? pal[(Math.random() * 3) | 0] : '#ffffff';
+    const x = this.rand() * 256;
+    const y = this.rand() * 128;
+    const r = 2 + this.rand() * 16;
+    g.fillStyle = this.rand() < 0.5 ? pal[(this.rand() * 3) | 0] : '#ffffff';
     g.beginPath();
     g.ellipse(x, y, r, r * 0.45, 0, 0, Math.PI * 2);
     g.fill();
@@ -201,10 +201,10 @@ function makeBH(horizon) {
   const aR = new Float32Array(N), aA = new Float32Array(N), aY = new Float32Array(N), aS = new Float32Array(N);
   const posArr = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) {
-    aR[i] = horizon * (1.35 + Math.random() * 1.5);
-    aA[i] = Math.random() * Math.PI * 2;
-    aY[i] = (Math.random() - 0.5) * horizon * 0.35;
-    aS[i] = (0.6 + Math.random() * 1.4) * (horizon * 1.35) / aR[i];
+    aR[i] = horizon * (1.35 + this.rand() * 1.5);
+    aA[i] = this.rand() * Math.PI * 2;
+    aY[i] = (this.rand() - 0.5) * horizon * 0.35;
+    aS[i] = (0.6 + this.rand() * 1.4) * (horizon * 1.35) / aR[i];
   }
   orbitGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
   orbitGeo.setAttribute('aR', new THREE.BufferAttribute(aR, 1));
@@ -312,6 +312,9 @@ function makePlanet(radius, seed) {
 
 export class World {
   constructor(ctx) {
+    this.rand = Math.random;
+    this.modifier = null;
+    this.magnetR = 19;
     this.ctx = ctx;
     this.scene = ctx.scene;
     this.frontier = -420;
@@ -516,7 +519,7 @@ export class World {
       const ph = Math.acos(2 * ((i % 4) / 3) - 1);
       const spike = new THREE.Mesh(new THREE.ConeGeometry(0.22, 1.1, 6), this.mineMatSpike);
       spike.position.set(Math.sin(ph) * Math.cos(th) * 1.5, Math.cos(ph) * 1.5, Math.sin(ph) * Math.sin(th) * 1.5);
-      spike.rotation.set(Math.random() * 0.4 - 0.2 + ph, 0, -th + Math.PI / 2);
+      spike.rotation.set(this.rand() * 0.4 - 0.2 + ph, 0, -th + Math.PI / 2);
       spike.lookAt(0, 0, 0);
       spike.rotateX(-Math.PI / 2);
       mesh.add(spike);
@@ -567,8 +570,8 @@ export class World {
     }
     const beacon = glowSprite(this.rgba('#57e6ff', 0.6), 40);
     group.add(beacon);
-    group.position.set(side * 300, (Math.random() - 0.5) * 100, -1500);
-    group.rotation.z = Math.random() * Math.PI;
+    group.position.set(side * 300, (this.rand() - 0.5) * 100, -1500);
+    group.rotation.z = this.rand() * Math.PI;
     this.scene.add(group);
     this.station = { kind: 'station', group, alive: true, spin: 0.05 };
   }
@@ -585,7 +588,7 @@ export class World {
     e.x = x; e.y = y; e.z = z;
     e.s = s; e.r = s * 1.12;
     e.vx = vx; e.vy = vy;
-    e.rx = Math.random() * 3; e.ry = Math.random() * 3; e.rz = Math.random() * 3;
+    e.rx = this.rand() * 3; e.ry = this.rand() * 3; e.rz = this.rand() * 3;
     e.rv = rv;
     e.hp = hp || 1;
     e.prevRel = null;
@@ -604,7 +607,7 @@ export class World {
     e.alive = true;
     e.x = x; e.y = y; e.z = z;
     e.baseY = y;
-    e.phase = Math.random() * 6.28;
+    e.phase = this.rand() * 6.28;
     e.vx = vx; e.vy = vy;
     if (!dead) this.crys.push(e);
     return e;
@@ -623,7 +626,7 @@ export class World {
     e.label.position.set(0, 2.6, 0);
     e.mesh.add(e.label);
     e.mesh.position.set(x, y, z);
-    e.spin = 1.2 + Math.random();
+    e.spin = 1.2 + this.rand();
     e.prevRel = null;
     return e;
   }
@@ -636,7 +639,7 @@ export class World {
   spawnComet(x, y, z) {
     const e = this.acquire(this.comets, 'comet', () => this.makeComet());
     e.mesh.position.set(x, y, z);
-    e.vel.set((Math.random() < 0.5 ? -1 : 1) * (26 + Math.random() * 40), (Math.random() - 0.5) * 30, 30 + Math.random() * 45);
+    e.vel.set((this.rand() < 0.5 ? -1 : 1) * (26 + this.rand() * 40), (this.rand() - 0.5) * 30, 30 + this.rand() * 45);
     e.hp = 2;
     e.r = 3.4;
     e.prevRel = null;
@@ -649,6 +652,21 @@ export class World {
     }
     e.tail.geometry.attributes.position.needsUpdate = true;
     return e;
+  }
+
+  setSeed(seed) {
+    let a = seed >>> 0;
+    this.rand = function () {
+      a |= 0;
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  setModifier(id) {
+    this.modifier = id;
   }
 
   reset() {
@@ -673,7 +691,7 @@ export class World {
   }
 
   pick(tier) {
-    if (this.tutorialKinds) return this.tutorialKinds[(Math.random() * this.tutorialKinds.length) | 0];
+    if (this.tutorialKinds) return this.tutorialKinds[(this.rand() * this.tutorialKinds.length) | 0];
     const w = [
       [34, 30, 10, 7, 6, 5, 4, 2, 2, 0, 0, 0],
       [28, 23, 10, 9, 5, 5, 5, 4, 4, 3, 3, 1],
@@ -682,8 +700,9 @@ export class World {
       [18, 16, 10, 9, 5, 5, 5, 6, 4, 8, 12, 2]
     ][tier];
     let sum = 0;
+    if (this.modifier === 'SWARM') { w[7] *= 3; w[9] *= 3; }
     for (const x of w) sum += x;
-    let roll = Math.random() * sum;
+    let roll = this.rand() * sum;
     const names = ['ast', 'cry', 'gate', 'planet', 'shards', 'tank', 'sat', 'mine', 'pup', 'comet', 'bh', 'art'];
     for (let i = 0; i < names.length; i++) {
       roll -= w[i];
@@ -706,25 +725,25 @@ export class World {
     this.spawnedCount++;
     switch (kind) {
       case 'ast': {
-        if (Math.random() < 0.25 && tier > 0) { this.spawnWall(z); return 12; }
-        const n = 5 + tier * 2 + ((Math.random() * 4) | 0);
+        if (this.rand() < 0.25 && tier > 0) { this.spawnWall(z); return 12; }
+        const n = 5 + tier * 2 + ((this.rand() * 4) | 0);
         for (let i = 0; i < n; i++) {
-          const s = 2.2 + Math.random() * 4.6;
+          const s = 2.2 + this.rand() * 4.6;
           this.spawnAsteroid(
-            (Math.random() - 0.5) * 280, (Math.random() - 0.5) * 175, z - Math.random() * 80,
-            s, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 1.6
+            (this.rand() - 0.5) * 280, (this.rand() - 0.5) * 175, z - this.rand() * 80,
+            s, (this.rand() - 0.5) * 4, (this.rand() - 0.5) * 4, (this.rand() - 0.5) * 1.6
           );
         }
         return 85;
       }
       case 'cry': {
-        if (Math.random() < 0.3) { this.spawnCrystalRing(z); return 30; }
-        const n = 8 + ((Math.random() * 6) | 0);
-        const x0 = (Math.random() - 0.5) * 170;
-        const y0 = (Math.random() - 0.5) * 110;
-        const ampX = 15 + Math.random() * 40;
-        const ampY = 10 + Math.random() * 26;
-        const ph = Math.random() * 6.28;
+        if (this.rand() < 0.3) { this.spawnCrystalRing(z); return 30; }
+        const n = 8 + ((this.rand() * 6) | 0);
+        const x0 = (this.rand() - 0.5) * 170;
+        const y0 = (this.rand() - 0.5) * 110;
+        const ampX = 15 + this.rand() * 40;
+        const ampY = 10 + this.rand() * 26;
+        const ph = this.rand() * 6.28;
         for (let i = 0; i < n; i++) {
           const x = THREE.MathUtils.clamp(x0 + Math.sin(i * 0.55 + ph) * ampX, -138, 138);
           const y = THREE.MathUtils.clamp(y0 + Math.cos(i * 0.42 + ph) * ampY, -86, 86);
@@ -733,58 +752,58 @@ export class World {
         return n * 13 + 20;
       }
       case 'gate': {
-        this.spawnGateAt((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 95, z);
+        this.spawnGateAt((this.rand() - 0.5) * 150, (this.rand() - 0.5) * 95, z);
         return 10;
       }
       case 'shards': {
-        const cx = (Math.random() - 0.5) * 200;
-        const cy = (Math.random() - 0.5) * 130;
-        const n = 8 + ((Math.random() * 7) | 0);
+        const cx = (this.rand() - 0.5) * 200;
+        const cy = (this.rand() - 0.5) * 130;
+        const n = 8 + ((this.rand() * 7) | 0);
         for (let i = 0; i < n; i++) {
           const dead = this.shardEnts.find(s => !s.alive);
           const e = dead || { alive: false };
           e.alive = true;
-          e.x = cx + (Math.random() - 0.5) * 90;
-          e.y = cy + (Math.random() - 0.5) * 60;
-          e.z = z - Math.random() * 130;
-          e.s = 1.2 + Math.random() * 2.6;
-          e.rx = Math.random() * 3; e.ry = Math.random() * 3;
-          e.rv = (Math.random() - 0.5) * 0.8;
+          e.x = cx + (this.rand() - 0.5) * 90;
+          e.y = cy + (this.rand() - 0.5) * 60;
+          e.z = z - this.rand() * 130;
+          e.s = 1.2 + this.rand() * 2.6;
+          e.rx = this.rand() * 3; e.ry = this.rand() * 3;
+          e.rv = (this.rand() - 0.5) * 0.8;
           if (!dead) this.shardEnts.push(e);
         }
         return 140;
       }
       case 'tank': {
         const e = this.acquire(this.tanks, 'tank', () => this.makeTank());
-        e.mesh.position.set((Math.random() - 0.5) * 240, (Math.random() - 0.5) * 150, z);
-        e.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-        e.vx = (Math.random() - 0.5) * 3;
-        e.vy = (Math.random() - 0.5) * 3;
-        e.rv = (Math.random() - 0.5) * 1.2;
+        e.mesh.position.set((this.rand() - 0.5) * 240, (this.rand() - 0.5) * 150, z);
+        e.mesh.rotation.set(this.rand() * 3, this.rand() * 3, this.rand() * 3);
+        e.vx = (this.rand() - 0.5) * 3;
+        e.vy = (this.rand() - 0.5) * 3;
+        e.rv = (this.rand() - 0.5) * 1.2;
         e.hp = 1;
         e.prevRel = null;
         return 30;
       }
       case 'sat': {
         const e = this.acquire(this.sats, 'sat', () => this.makeSat());
-        e.mesh.position.set((Math.random() - 0.5) * 240, (Math.random() - 0.5) * 150, z);
-        e.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-        e.vx = (Math.random() - 0.5) * 2;
-        e.vy = (Math.random() - 0.5) * 2;
-        e.rv = (Math.random() - 0.5) * 0.5;
+        e.mesh.position.set((this.rand() - 0.5) * 240, (this.rand() - 0.5) * 150, z);
+        e.mesh.rotation.set(this.rand() * 3, this.rand() * 3, this.rand() * 3);
+        e.vx = (this.rand() - 0.5) * 2;
+        e.vy = (this.rand() - 0.5) * 2;
+        e.rv = (this.rand() - 0.5) * 0.5;
         e.hp = 2;
         e.prevRel = null;
         return 30;
       }
       case 'mine': {
-        const n = 2 + ((Math.random() * 3) | 0);
-        const mx = (Math.random() - 0.5) * 200;
-        const my = (Math.random() - 0.5) * 120;
+        const n = 2 + ((this.rand() * 3) | 0);
+        const mx = (this.rand() - 0.5) * 200;
+        const my = (this.rand() - 0.5) * 120;
         for (let i = 0; i < n; i++) {
           const e = this.acquire(this.mines, 'mine', () => this.makeMine());
-          e.mesh.position.set(mx + (Math.random() - 0.5) * 60, my + (Math.random() - 0.5) * 50, z - i * 26);
-          e.vx = (Math.random() - 0.5) * 2;
-          e.vy = (Math.random() - 0.5) * 2;
+          e.mesh.position.set(mx + (this.rand() - 0.5) * 60, my + (this.rand() - 0.5) * 50, z - i * 26);
+          e.vx = (this.rand() - 0.5) * 2;
+          e.vy = (this.rand() - 0.5) * 2;
           e.armed = false;
           e.prevRel = null;
         }
@@ -792,44 +811,44 @@ export class World {
       }
       case 'art': {
         const e = this.acquire(this.artifacts, 'art', () => this.makeArtifact());
-        e.mesh.position.set((Math.random() - 0.5) * 200, (Math.random() - 0.5) * 120, z);
+        e.mesh.position.set((this.rand() - 0.5) * 200, (this.rand() - 0.5) * 120, z);
         e.scanned = false;
         return 40;
       }
       case 'planet': {
         const e = this.acquire(this.planets, 'planet', () => this.makePlanet());
         this.planetSeed++;
-        const dwarf = Math.random() < 0.28;
-        const radius = dwarf ? 11 + Math.random() * 7 : 26 + Math.random() * 38;
-        const side = Math.random() < 0.5 ? -1 : 1;
-        const px = dwarf ? side * (46 + Math.random() * 60) : side * (165 + Math.random() * 90);
-        const py = dwarf ? (Math.random() - 0.5) * 100 : (Math.random() - 0.5) * 160;
+        const dwarf = this.rand() < 0.28;
+        const radius = dwarf ? 11 + this.rand() * 7 : 26 + this.rand() * 38;
+        const side = this.rand() < 0.5 ? -1 : 1;
+        const px = dwarf ? side * (46 + this.rand() * 60) : side * (165 + this.rand() * 90);
+        const py = dwarf ? (this.rand() - 0.5) * 100 : (this.rand() - 0.5) * 160;
         e.mesh.position.set(px, py, z);
         e.r = radius;
         e.prevRel = null;
         e.body.scale.setScalar(radius / 30);
         e.moonR = radius * 1.9;
         if (e.moon) e.moon.scale.setScalar(Math.max(0.5, radius / 30));
-        e.spin = 0.04 + Math.random() * 0.08;
-        e.moonAng = Math.random() * 6.28;
+        e.spin = 0.04 + this.rand() * 0.08;
+        e.moonAng = this.rand() * 6.28;
         return radius * 2 + 24;
       }
       case 'comet': {
-        const n = 1 + (Math.random() < 0.4 ? 1 : 0);
+        const n = 1 + (this.rand() < 0.4 ? 1 : 0);
         for (let i = 0; i < n; i++) {
-          this.spawnComet((Math.random() - 0.5) * 260, (Math.random() - 0.5) * 160, z - i * 60);
+          this.spawnComet((this.rand() - 0.5) * 260, (this.rand() - 0.5) * 160, z - i * 60);
         }
         return 40 + n * 40;
       }
       case 'pup': {
         const kinds = ['shield', 'repair', 'surge', 'multi'];
-        const k = kinds[(Math.random() * kinds.length) | 0];
-        this.spawnPup((Math.random() - 0.5) * 180, (Math.random() - 0.5) * 110, z, k);
+        const k = kinds[(this.rand() * kinds.length) | 0];
+        this.spawnPup((this.rand() - 0.5) * 180, (this.rand() - 0.5) * 110, z, k);
         return 20;
       }
       case 'bh': {
         const e = this.acquire(this.bhs, 'bh', () => this.makeBH());
-        const hz = 11 + Math.random() * 6;
+        const hz = 11 + this.rand() * 6;
         e.horizon = hz;
         e.r = hz;
         e.influence = 235;
@@ -838,7 +857,7 @@ export class World {
         e.diskMat.uniforms.uInner.value = hz * 1.25;
         e.diskMat.uniforms.uOuter.value = hz * 3.6;
         e.mesh.scale.setScalar(hz / 13);
-        e.mesh.position.set((Math.random() - 0.5) * 165, (Math.random() - 0.5) * 105, z);
+        e.mesh.position.set((this.rand() - 0.5) * 165, (this.rand() - 0.5) * 105, z);
         return 65;
       }
     }
@@ -847,26 +866,26 @@ export class World {
 
   spawnWall(z) {
     const tier = this.tier(this.ctx.state.dist);
-    const gapX = (Math.random() - 0.5) * 180;
-    const gapY = (Math.random() - 0.5) * 110;
+    const gapX = (this.rand() - 0.5) * 180;
+    const gapY = (this.rand() - 0.5) * 110;
     const gapR = Math.max(34, 50 - tier * 3);
     for (let x = -144; x <= 144; x += 29) {
       for (let y = -91; y <= 91; y += 30) {
         if (Math.hypot(x - gapX, y - gapY) < gapR) continue;
-        if (Math.random() < 0.12) continue;
-        const s = 4.6 + Math.random() * 2.6;
+        if (this.rand() < 0.12) continue;
+        const s = 4.6 + this.rand() * 2.6;
         this.spawnAsteroid(
-          x + (Math.random() - 0.5) * 8, y + (Math.random() - 0.5) * 8, z,
-          s, 0, 0, (Math.random() - 0.5) * 0.7
+          x + (this.rand() - 0.5) * 8, y + (this.rand() - 0.5) * 8, z,
+          s, 0, 0, (this.rand() - 0.5) * 0.7
         );
       }
     }
   }
 
   spawnCrystalRing(z) {
-    const cx = (Math.random() - 0.5) * 120;
-    const cy = (Math.random() - 0.5) * 80;
-    const rr = 15 + Math.random() * 11;
+    const cx = (this.rand() - 0.5) * 120;
+    const cy = (this.rand() - 0.5) * 80;
+    const rr = 15 + this.rand() * 11;
     for (let i = 0; i < 10; i++) {
       const a = (i / 10) * Math.PI * 2;
       this.spawnCrystal(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, z);
@@ -874,12 +893,13 @@ export class World {
   }
 
   spawnDrop(pos) {
-    const roll = Math.random();
-    if (roll < 0.55) {
-      this.spawnCrystal(pos.x, pos.y, pos.z, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
-    } else if (roll < 0.85) {
+    const rich = this.modifier === 'RICH';
+    const roll = this.rand();
+    if (roll < (rich ? 0.7 : 0.55)) {
+      this.spawnCrystal(pos.x, pos.y, pos.z, (this.rand() - 0.5) * 8, (this.rand() - 0.5) * 8);
+    } else if (roll < (rich ? 0.95 : 0.85)) {
       const kinds = ['shield', 'repair', 'surge', 'multi'];
-      this.spawnPup(pos.x, pos.y, pos.z, kinds[(Math.random() * 4) | 0]);
+      this.spawnPup(pos.x, pos.y, pos.z, kinds[(this.rand() * 4) | 0]);
     }
   }
 
@@ -902,7 +922,7 @@ export class World {
     this.frontier += sp * dt;
     while (this.frontier > SPAWN_Z) {
       const depth = this.spawnPattern(this.frontier, this.tier(st.dist));
-      this.frontier -= depth + Math.max(58, 132 - this.tier(st.dist) * 14);
+      this.frontier -= (depth + Math.max(58, 132 - this.tier(st.dist) * 14)) * (this.bossMode ? 1.9 : 1);
     }
 
     this.radarData.length = 0;
@@ -970,7 +990,7 @@ export class World {
       if (!godmode) {
         const dx = e.x - shipPos.x, dy = e.y - shipPos.y, dz = e.z - shipPos.z;
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (d < 19) {
+        if (d < this.magnetR) {
           const k = Math.min(1, dt * 9);
           e.x -= dx * k; e.y -= dy * k; e.z -= dz * k;
         }

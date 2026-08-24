@@ -68,8 +68,19 @@ step('back at menu with LAUNCH label', (await page.$eval('#btn-play', el => el.t
 await page.click('#btn-hangar');
 await new Promise(r => setTimeout(r, 600));
 step('hangar renders 7 skins', (await page.$$eval('.skin-card', els => els.length)) === 7);
+const tabs = await page.$$eval('.tab-btn', els => els.map(e => e.textContent));
+step('hangar tabs render', tabs.length === 2 && tabs[0] === 'SHIP SKINS', tabs.join('|'));
+await page.click('.tab-btn:nth-child(2)');
+await new Promise(r => setTimeout(r, 400));
+const upgCards = await page.$$eval('.upg-card', els => els.length);
+step('upgrades tab renders 5 tracks', upgCards === 5, 'cards=' + upgCards);
+const upgDisabled = await page.$$eval('.upg-btn', els => els.filter(b => b.disabled).length);
+step('upgrades locked at 0 cores', upgDisabled === 5);
 await page.click('#hangar-back');
 await new Promise(r => setTimeout(r, 400));
+
+const dailyLbl = await page.$eval('#btn-daily', el => el.textContent);
+step('daily button shows today modifier', /DAILY RUN — /.test(dailyLbl), dailyLbl);
 
 await page.click('#btn-profile');
 await new Promise(r => setTimeout(r, 500));

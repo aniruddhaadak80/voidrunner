@@ -61,6 +61,82 @@ export class AudioSys {
     filt.connect(gain).connect(this.master);
     o1.start(); o2.start(); o3.start(); lfo.start();
     this.musicNodes = { o1, o2, o3, lfo, gain };
+    this.seq = { next: 0, step: 0, intensity: 0, boost: false, started: false };
+  }
+
+  updateMusic(intensity, boost) {
+    if (!this.seq) return;
+    this.seq.intensity = intensity;
+    this.seq.boost = boost;
+  }
+
+  update() {
+    if (!this.ctx || !this.seq || !this.enabled) return;
+    const now = this.ctx.currentTime;
+    if (!this.seq.started) { this.seq.next = now + 0.1; this.seq.started = true; }
+    while (this.seq.next < now + 0.15) {
+      this.scheduleStep(this.seq.next, this.seq.step);
+      this.seq.step = (this.seq.step + 1) % 32;
+      this.seq.next += 0.24;
+    }
+  }
+
+  scheduleStep(t, s) {
+    const c = this.ctx;
+    const bassPat = [55, 55, 41.2, 49];
+    if (s % 4 === 0) {
+      const o = c.createOscillator();
+      const g = c.createGain();
+      const f = c.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = 260;
+      o.type = 'square';
+      o.frequency.value = bassPat[(s / 4) | 0];
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.09 + this.seq.intensity * 0.05, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+      o.connect(f).connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.45);
+    }
+    if (this.seq.intensity > 0.3 && s % 2 === 1) {
+      const scale = [0, 3, 7, 10, 12, 15, 10, 7];
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.type = 'sine';
+      o.frequency.value = 220 * Math.pow(2, scale[(s / 2) % 8] / 12) * (this.seq.intensity > 0.65 ? 2 : 1);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.028 + this.seq.intensity * 0.03, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      o.connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.2);
+    }
+    if (this.seq.boost && s % 2 === 0) {
+      const src = c.createBufferSource();
+      src.buffer = this.noiseBuf;
+      const f = c.createBiquadFilter();
+      f.type = 'highpass';
+      f.frequency.value = 7000;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.035, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+      src.connect(f).connect(g).connect(this.master);
+      src.start(t);
+      src.stop(t + 0.06);
+    }
+    if (this.seq.intensity > 0.75 && s % 16 === 0) {
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.type = 'sawtooth';
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.03, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      o.connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.55);
+    }
   }
 
   engineOn() {

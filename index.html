@@ -55,6 +55,11 @@
     <canvas id="radar" width="160" height="160"></canvas>
     <div id="alerts"></div>
     <div id="banner"></div>
+    <div id="boss-bar" class="hidden">
+      <div id="boss-name">DREADNOUGHT</div>
+      <div class="bbar"><div id="boss-fill"></div></div>
+    </div>
+    <div id="bracket" class="hidden"><span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span></div>
     <div id="popups"></div>
     <div id="reticle"></div>
     <div id="vignette"></div>
@@ -74,6 +79,7 @@
     </div>
     <nav class="menu-col">
       <button id="btn-play" class="cta">START TRAINING</button>
+      <button id="btn-daily" class="mbtn">DAILY RUN</button>
       <button id="btn-training" class="mbtn small">REPLAY TRAINING</button>
       <button id="btn-hangar" class="mbtn">HANGAR</button>
       <button id="btn-profile" class="mbtn">PILOT PROFILE</button>
@@ -89,7 +95,7 @@
         <div class="xp-mini"><div id="menu-xp-fill"></div></div>
         <div id="menu-xp-text" class="xp-text">0 / 140 XP</div>
       </div>
-      <div class="credit">BUILT BY ANIRUDDHA ADAK · THREE.JS · WEBGL · V3.0</div>
+      <div class="credit">BUILT BY ANIRUDDHA ADAK · THREE.JS · WEBGL · V4.0</div>
       <div id="device-chip" class="device-chip"></div>
     </footer>
   </div>
@@ -134,6 +140,8 @@
   <div id="menu-hangar" class="layer menu hidden">
     <div class="panel wide-panel">
       <h2>HANGAR</h2>
+      <div id="hangar-tabs"></div>
+      <p class="panel-sub" id="hangar-cores"></p>
       <p class="panel-sub" id="hangar-perk"></p>
       <div id="hangar-grid" class="skin-grid"></div>
       <div class="back-row"><button id="hangar-back" class="mbtn">BACK</button></div>

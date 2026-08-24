@@ -5,7 +5,8 @@
   "type": "module",
   "description": "VOIDRUNNER - deep-space infinite flight simulator",
   "scripts": {
-    "test": "node test-headless.mjs"
+    "test": "node test-headless.mjs",
+    "test:live": "node test-live.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "^25.8.0"

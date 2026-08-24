@@ -170,6 +170,8 @@ npm test
 
 Requires Edge (configurable path in `test-headless.mjs`). Runs against a local server on a software-GL renderer.
 
+`npm run test:live` runs the same smoke suite against the production deployment.
+
 ## Performance & Quality Tiers
 
 | Tier | Pixel Ratio | Bloom | MSAA | Stars/Dust | Default For |

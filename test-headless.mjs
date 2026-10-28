@@ -9,7 +9,11 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const server = http.createServer((q, s) => {
   let p = q.url.split('?')[0];
   if (p === '/') p = '/index.html';
-  fs.readFile(path.join(ROOT, p), (e, d) => {
+  const resolved = path.resolve(ROOT, '.' + p);
+  if (!resolved.startsWith(ROOT + path.sep) && resolved !== ROOT) {
+    s.statusCode = 403; s.end(); return;
+  }
+  fs.readFile(resolved, (e, d) => {
     if (e) { s.statusCode = 404; s.end(); return; }
     s.setHeader('Content-Type', mime[path.extname(p)] || 'text/plain');
     s.end(d);

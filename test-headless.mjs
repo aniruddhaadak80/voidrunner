@@ -13,6 +13,7 @@ const server = http.createServer((q, s) => {
   if (!resolved.startsWith(ROOT + path.sep) && resolved !== ROOT) {
     s.statusCode = 403; s.end(); return;
   }
+  // codeql[js/path-injection] -- path is resolved and verified to stay under ROOT before this read.
   fs.readFile(resolved, (e, d) => {
     if (e) { s.statusCode = 404; s.end(); return; }
     s.setHeader('Content-Type', mime[path.extname(p)] || 'text/plain');
